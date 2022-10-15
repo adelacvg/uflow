@@ -214,9 +214,9 @@ class ResidualCouplingLayer(nn.Module):
 
     self.pre = nn.Conv1d(self.half_channels, hidden_channels, 1)
     self.enc = WN(hidden_channels, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout, gin_channels=gin_channels)
-    self.post = nn.Conv1d(hidden_channels, self.half_channels * (2 - mean_only), 1)
-    # self.post.weight.data.zero_()
-    # self.post.bias.data.zero_()
+    self.post = nn.Conv1d(hidden_channels, self.half_channels, 1)
+    self.post.weight.data.zero_()
+    self.post.bias.data.zero_()
 
   # Shapes:
   #     - x: :math:`[B, C, T]`
@@ -478,8 +478,6 @@ class FlowGenerator(nn.Module):
     self.flow1 = ResidualCouplingBlock(inter_channels, hidden_channels, kernel_size, dilation_rate, n_layers)
     self.flow2 = ResidualCouplingBlock(inter_channels, hidden_channels, kernel_size, dilation_rate, n_layers)
     self.upflow = ResidualUpsampleCouplingBlock(inter_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
-    # self.fc_mu = nn.Linear(input_length, input_length)
-    # self.fc_var = nn.Linear(input_length, input_length)
   def forward(self,x,reverse=False):
     """
     z : B,C,L
@@ -489,11 +487,8 @@ class FlowGenerator(nn.Module):
     if reverse==False:
       z = self.flow1(x)
       z_norm = z
-      # mu = self.fc_mu(z)
-      # log_var = self.fc_var(z)
       z = self.flow2(z)
       z = self.upflow(z)
-      # print(z.shape)
       return z,z_norm
     else:
       z,flow_pyramid = self.upflow(x,reverse=True)
@@ -517,14 +512,14 @@ class GeneratorTrn(nn.Module):
     super().__init__()
     self.enc = Encoder(in_channels,expand)
     self.flow_g = FlowGenerator(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
-  def forward(self,x):
-    enc_z,enc_pyramid = self.enc(x)
-    y,z_norm = self.flow_g(enc_z)
-    # print(y.shape)
-    return enc_z,z_norm,y,enc_pyramid
-  def reverse(self,x):
-    enc_z,z_norm,flow_pyramid = self.flow_g(x,reverse=True)
-    return enc_z,z_norm,flow_pyramid
+  def forward(self,x,reverse=False):
+    if reverse==False:
+      enc_z,enc_pyramid = self.enc(x)
+      y,z_norm = self.flow_g(enc_z)
+      return enc_z,z_norm,y,enc_pyramid
+    else:
+      enc_z,z_norm,flow_pyramid = self.flow_g(x,reverse=True)
+      return enc_z,z_norm,flow_pyramid
 
 def nonlinearity(x):
     # swish
@@ -662,13 +657,16 @@ class Decoder(nn.Module):
     x_pyramid=[]
     x_pyramid.append(x)
     for i,layer in enumerate(self.model):
-      # print(x.shape)
-      # print(unet_pyramid[i].shape)
       x = torch.cat([x,unet_pyramid[i]],dim=1)
       x = layer(x)
       x_pyramid.append(x)
     return x,x_pyramid
 
+class Decoder_test(nn.Module):
+  def __init__(self) -> None:
+     super().__init__()
+  def forward(self,x):
+    return x
 
 #√
 class Hierarchy_flow(nn.Module):
@@ -698,7 +696,7 @@ class Hierarchy_flow(nn.Module):
     #x0:B,C/2,T
     x0,x1 = torch.split(x,[self.half_channel]*2,1)
     # print(x0)
-    l = x1.shape[2]
+    l = int(x1.shape[2])
     s = x0
     s = self.pre(s)
     s = self.enc(s)
@@ -707,6 +705,7 @@ class Hierarchy_flow(nn.Module):
     #s: B,C/2,2*T-1
     # assert((l & (l-torch.tensor(1)) == 0) and l != 0)
     # assert(s.shape[0] == 2*l-1)
+    # print(l)
     bit_l = l.bit_length()
 
     if reverse==True:

@@ -16,8 +16,9 @@ from torchvision.utils import save_image
 from torch.utils.data.distributed import DistributedSampler
 import os
 import commons
-from model import Decoder, GeneratorTrn, Morton_decode, Morton_encode
+from model import Decoder, Decoder_test, GeneratorTrn, Morton_decode, Morton_encode
 import utils
+from torch.profiler import profile, record_function, ProfilerActivity
 import json
 import argparse
 import itertools
@@ -27,12 +28,17 @@ device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 # device = 'cpu'
 torch.backends.cudnn.benchmark = True
 global_step = 0
+profile1 = False
 
 def main():
   assert torch.cuda.is_available(), "CPU training is not allowed."
 
   hps = utils.get_hparams()
+  # with profile(activities=[
+  #       ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
   run(hps)
+  # print(prof.table())
+  # prof.export_chrome_trace('./profile.json')
 
 def run(hps):
   global global_step
@@ -93,8 +99,10 @@ def run(hps):
   scaler = GradScaler(enabled=hps.train.fp16_run)
 
   # hps.train.epochs=1
-  # train_loader = [next(iter(train_loader))]
+  train_loader = [next(iter(train_loader))]
   
+
+
   torch.autograd.set_detect_anomaly(True)
   for epoch in range(epoch_str, hps.train.epochs+1):
     net_g.train()
@@ -107,11 +115,11 @@ def run(hps):
       x_enc = torch.cat([x_enc,-x_enc],dim=1)
       with autocast(enabled=hps.train.fp16_run):
         enc_z_gt,z_norm,y,enc_pyramid = net_g(x_enc.detach())
-        enc_pyramid = [morton_dec(i).to(device).detach() for i in enc_pyramid]
-        enc_pyramid.reverse()
+        enc_pyramid_t = [morton_dec(i).to(device).clone().detach() for i in enc_pyramid]
+        enc_pyramid_t.reverse()
         # print(enc_pyramid[0].shape)
         with autocast(enabled=False):
-          loss_recon = F.mse_loss(y,x_enc)
+          loss_recon = F.mse_loss(y,x_enc.detach())
           if epoch<500:
             loss_kld = 0.01*F.l1_loss(z_norm,torch.zeros_like(z_norm))
           else:
@@ -119,33 +127,36 @@ def run(hps):
           loss_g_all = loss_recon+loss_kld
 
       optim_g.zero_grad()
-      loss_g_all.backward()
-      optim_g.step()
+      loss_g_all.backward(retain_graph=True)
 
       with autocast(enabled=hps.train.fp16_run):
-        enc_z,z_norm,flow_pyramid = net_g.reverse(x_enc.detach())
+        enc_z,z_norm_r,flow_pyramid = net_g(x_enc.detach(),reverse=True)
         with autocast(enabled=False):
-          flow_pyramid = [morton_dec(i).to(device).detach() for i in flow_pyramid]
-          flow_pyramid.reverse()
+          flow_pyramid_t = [morton_dec(i).to(device).detach() for i in flow_pyramid]
+          flow_pyramid_t.reverse()
           loss_z_recon =F.mse_loss(enc_z,enc_z_gt.detach())
-      optim_g.zero_grad()
-      loss_z_recon.backward(retain_graph=True)
-      optim_g.step()
 
+      loss_z_recon.backward(retain_graph=True)
+
+      loss_pyramid=0
+      loss_pyramid_gt=0
       with autocast(enabled=hps.train.fp16_run):
-        enc_z = morton_dec(enc_z).to(device).clone().detach()
-        y_dec,y_pyramid = net_d(enc_z,flow_pyramid)
+        enc_z = morton_dec(enc_z).to(device).clone()
+        enc_z_gt = morton_dec(enc_z_gt).to(device).clone()
+        y_dec,y_pyramid = net_d(enc_z,flow_pyramid_t)
+        y_dec_gt,y_pyramid_gt = net_d(enc_z,flow_pyramid_t)
         with autocast(enabled=False):
-          loss_pyramid=0
           for i,yy in enumerate(y_pyramid):
-            loss_pyramid=loss_pyramid + torch.abs(yy-enc_pyramid[i]).mean()
-          loss_y_dec_recon =F.mse_loss(y_dec,x.detach())
-          loss_d_total = loss_pyramid+loss_y_dec_recon
+            loss_pyramid=loss_pyramid + torch.abs(yy-enc_pyramid_t[i].detach()).mean()
+          for i,yy in enumerate(y_pyramid_gt):
+            loss_pyramid_gt=loss_pyramid_gt + torch.abs(yy-enc_pyramid_t[i].detach()).mean()
+          loss_y_dec_recon = F.mse_loss(y_dec,x.detach())
+          loss_y_dec_recon_gt =  F.mse_loss(y_dec_gt,x.detach())
+          loss_d_total = loss_pyramid+loss_y_dec_recon+loss_pyramid_gt+loss_y_dec_recon_gt
       optim_d.zero_grad()
       loss_d_total.backward()
-      # loss_y_dec_recon.backward()
-      # loss_pyramid.backward()
       optim_d.step()
+      optim_g.step()
 
       if global_step%hps.train.log_interval == 0:
         y0,y1=torch.split(y,[1,1],dim=1)
@@ -161,7 +172,8 @@ def run(hps):
         
         scalar_dict = {"loss/g/total": loss_g_all, "learning_rate": lr}
         scalar_dict.update({"loss/g/recon": loss_recon, "loss/g/kld": loss_kld,"loss/g/z_recon":loss_z_recon})
-        scalar_dict.update({'loss/d/loss_y_dec_recon':loss_y_dec_recon,'loss/d/loss_pyramid':loss_pyramid,'loss/d/total':loss_d_total})
+        scalar_dict.update({'loss/d/loss_y_dec_recon':loss_y_dec_recon,'loss/d/loss_y_dec_recon_gt':loss_y_dec_recon_gt,
+        'loss/d/loss_pyramid':loss_pyramid,'loss/d/loss_pyramid_gt':loss_pyramid_gt,'loss/d/total':loss_d_total})
 
         image_dict = { 
             "img/flow_gen" : utils.plot_image_to_numpy(y0[0].data.cpu().numpy())
@@ -176,6 +188,8 @@ def run(hps):
         utils.save_checkpoint(net_d, optim_d, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "D_{}.pth".format(global_step)))
       #   pass
       global_step += 1
+      if profile1==True:
+        return
     logger.info('====> Epoch: {}'.format(epoch))
     scheduler_g.step()
 

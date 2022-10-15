@@ -3,6 +3,7 @@ from torchvision.utils import save_image
 
 import torch
 import torchvision
+from torch.nn import functional as F
 from torch import nn
 from model import Decoder, Encoder, GeneratorTrn, Hierarchy_flow, Morton_decode, ResidualConv1d, ResidualCouplingBlock, ResidualCouplingHierarchyBlock, ResidualUpsampleCouplingLayer,ResidualUpsampleCouplingBlock, SimpleDecoder
 from model import Morton_encode
@@ -265,25 +266,58 @@ w=4
 # print('!')
 # d = Decoder(2,2)
 # x = torch.rand(1,2,4,4)
-# flow_pyramid=[]
-# for i in [4,8,16,32]:
-#   flow_pyramid.append(torch.rand(1,2,i,i))
+flow_pyramid=[]
+for i in [4,8,16,32]:
+  flow_pyramid.append(torch.rand(1,2,i,i))
 # y,y_pyramid = d(x,flow_pyramid)
 # print(y.shape)
 # for i in y_pyramid:
 #   print(i.shape)
 
-import time
-x=torch.rand(512,512)
-print(x)
-time_start=time.time()
-# import pymorton as pm
+# import time
+# x=torch.rand(512,512)
+# print(x)
+# time_start=time.time()
+# # import pymorton as pm
 
-# # pm.deinterleave2(mortoncode)             # (100, 200)
-# for i in range(512):
-#   for j in range(512):
-#     pm.interleave2(i,j)
-x = morton_encode(x)
-print(x)
-time_end=time.time()
-print('time cost',time_end-time_start,'s')
+# # # pm.deinterleave2(mortoncode)             # (100, 200)
+# # for i in range(512):
+# #   for j in range(512):
+# #     pm.interleave2(i,j)
+# x = morton_encode(x)
+# print(x)
+# time_end=time.time()
+# print('time cost',time_end-time_start,'s')
+
+# from torch.utils.tensorboard import SummaryWriter
+# writer = SummaryWriter(log_dir='logs/test')
+# netd = Decoder(2,2)
+# writer.add_graph(netg,input_to_model = torch.rand(1,2,32*32))
+# # writer.add_graph(netd,input_to_model = [torch.rand(1,2,4,4),flow_pyramid])
+# writer.close()
+
+morton_dec = Morton_decode()
+morton_enc = Morton_encode()
+net_g = GeneratorTrn(2,256,3,4,1,4,3,False,16)
+optim_g = torch.optim.AdamW(
+    net_g.parameters())
+
+x = torch.rand(1,1,32,32)
+x_enc=morton_enc(x)
+x = x*2-1
+x = torch.cat([x,-x],dim=1)
+x_enc = x_enc*2-1
+x_enc = torch.cat([x_enc,-x_enc],dim=1)
+enc_z_gt,z_norm,y,enc_pyramid = net_g(x_enc.detach())
+enc_pyramid_t = [morton_dec(i).clone().detach() for i in enc_pyramid]
+enc_pyramid_t.reverse()
+loss_recon = F.mse_loss(y,x_enc.detach())
+loss_kld = 0.01*F.l1_loss(z_norm,torch.zeros_like(z_norm))
+loss_g_all = loss_recon+loss_kld
+
+optim_g.zero_grad()
+loss_g_all.backward(retain_graph=True)
+
+loss_recon_1 = F.mse_loss(y,x_enc.detach())
+loss_recon_1.backward()
+optim_g.step()
