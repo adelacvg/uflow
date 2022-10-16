@@ -322,14 +322,14 @@ for i in [4,8,16,32]:
 # loss_recon_1.backward()
 # optim_g.step()
 
-import time
-import morton_code
-x = torch.rand(16,2,256,256)
-# print(x)
-time_start=time.time()
-encoded = morton_code.morton_encode(x)
-# print(encoded)
-time_end=time.time()
-print('time cost',time_end-time_start,'s')
-decoded = morton_code.morton_decode(encoded)
+# import time
+# import morton_code
+# x = torch.rand(16,2,256,256)
+# # print(x)
+# time_start=time.time()
+# encoded = morton_code.morton_encode(x)
+# # print(encoded)
+# time_end=time.time()
+# print('time cost',time_end-time_start,'s')
+# decoded = morton_code.morton_decode(encoded)
 # print(decoded)

@@ -107,22 +107,18 @@ def run(hps):
     net_g.train()
     for batch_idx, (x, _) in enumerate(train_loader):
       x = x.to(device)
-      x_enc=morton_encode(x)
       x = x*2-1
-      x = torch.cat([x,-x],dim=1)
-      x_enc = x_enc*2-1
-      x_enc = torch.cat([x_enc,-x_enc],dim=1)
       with autocast(enabled=hps.train.fp16_run):
-        enc_z_gt,z_norm,y,enc_pyramid = net_g(x_enc.detach())
+        enc_z_gt,z_norm,y,enc_pyramid,x_enc,x = net_g(x.detach())
         enc_pyramid_t = [morton_decode(i).clone().detach() for i in enc_pyramid]
         enc_pyramid_t.reverse()
         # print(enc_pyramid[0].shape)
         with autocast(enabled=False):
           loss_recon = F.mse_loss(y,x_enc.detach())
           if epoch<500:
-            loss_kld = 0.01*F.l1_loss(z_norm,torch.zeros_like(z_norm))
+            loss_kld = 0.0001*F.l1_loss(z_norm,torch.zeros_like(z_norm))
           else:
-            loss_kld =  0.001*F.l1_loss(z_norm,torch.zeros_like(z_norm))
+            loss_kld =  0.00001*F.l1_loss(z_norm,torch.zeros_like(z_norm))
           loss_g_all = loss_recon+loss_kld
 
       optim_g.zero_grad()
