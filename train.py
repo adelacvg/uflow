@@ -23,6 +23,7 @@ import json
 import argparse
 import itertools
 import math
+from morton_code import morton_encode,morton_decode
 
 device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 # device = 'cpu'
@@ -68,8 +69,6 @@ def run(hps):
           shuffle=False,
           num_workers=4)
   
-  morton_enc = Morton_encode().to(device)
-  morton_dec = Morton_decode().to(device)
   net_g = GeneratorTrn(**hps.model).to(device)
   optim_g = torch.optim.AdamW(
     net_g.parameters(), 
@@ -99,7 +98,7 @@ def run(hps):
   scaler = GradScaler(enabled=hps.train.fp16_run)
 
   # hps.train.epochs=1
-  train_loader = [next(iter(train_loader))]
+  # train_loader = [next(iter(train_loader))]
   
 
 
@@ -108,14 +107,14 @@ def run(hps):
     net_g.train()
     for batch_idx, (x, _) in enumerate(train_loader):
       x = x.to(device)
-      x_enc=morton_enc(x).to(device)
+      x_enc=morton_encode(x)
       x = x*2-1
       x = torch.cat([x,-x],dim=1)
       x_enc = x_enc*2-1
       x_enc = torch.cat([x_enc,-x_enc],dim=1)
       with autocast(enabled=hps.train.fp16_run):
         enc_z_gt,z_norm,y,enc_pyramid = net_g(x_enc.detach())
-        enc_pyramid_t = [morton_dec(i).to(device).clone().detach() for i in enc_pyramid]
+        enc_pyramid_t = [morton_decode(i).clone().detach() for i in enc_pyramid]
         enc_pyramid_t.reverse()
         # print(enc_pyramid[0].shape)
         with autocast(enabled=False):
@@ -132,7 +131,7 @@ def run(hps):
       with autocast(enabled=hps.train.fp16_run):
         enc_z,z_norm_r,flow_pyramid = net_g(x_enc.detach(),reverse=True)
         with autocast(enabled=False):
-          flow_pyramid_t = [morton_dec(i).to(device).detach() for i in flow_pyramid]
+          flow_pyramid_t = [morton_decode(i).to(device).detach() for i in flow_pyramid]
           flow_pyramid_t.reverse()
           loss_z_recon =F.mse_loss(enc_z,enc_z_gt.detach())
 
@@ -141,8 +140,8 @@ def run(hps):
       loss_pyramid=0
       loss_pyramid_gt=0
       with autocast(enabled=hps.train.fp16_run):
-        enc_z = morton_dec(enc_z).to(device).clone()
-        enc_z_gt = morton_dec(enc_z_gt).to(device).clone()
+        enc_z = morton_decode(enc_z).to(device).clone()
+        enc_z_gt = morton_decode(enc_z_gt).to(device).clone()
         y_dec,y_pyramid = net_d(enc_z,flow_pyramid_t)
         y_dec_gt,y_pyramid_gt = net_d(enc_z,flow_pyramid_t)
         with autocast(enabled=False):
@@ -161,7 +160,7 @@ def run(hps):
       if global_step%hps.train.log_interval == 0:
         y0,y1=torch.split(y,[1,1],dim=1)
         y0 = (y0+1)/2
-        y0 = morton_dec(y0)
+        y0 = morton_decode(y0)
 
         lr = optim_g.param_groups[0]['lr']
         losses = [loss_recon,loss_kld,loss_g_all,loss_y_dec_recon,loss_pyramid,loss_d_total]
