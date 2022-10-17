@@ -296,28 +296,40 @@ for i in [4,8,16,32]:
 # # writer.add_graph(netd,input_to_model = [torch.rand(1,2,4,4),flow_pyramid])
 # writer.close()
 
-morton_dec = Morton_decode()
-morton_enc = Morton_encode()
-net_g = GeneratorTrn(2,256,3,4,1,4,3,False,16)
-optim_g = torch.optim.AdamW(
-    net_g.parameters())
+# morton_dec = Morton_decode()
+# morton_enc = Morton_encode()
+# net_g = GeneratorTrn(2,256,3,4,1,4,3,False,16)
+# optim_g = torch.optim.AdamW(
+#     net_g.parameters())
 
-x = torch.rand(1,1,32,32)
-x_enc=morton_enc(x)
-x = x*2-1
-x = torch.cat([x,-x],dim=1)
-x_enc = x_enc*2-1
-x_enc = torch.cat([x_enc,-x_enc],dim=1)
-enc_z_gt,z_norm,y,enc_pyramid = net_g(x_enc.detach())
-enc_pyramid_t = [morton_dec(i).clone().detach() for i in enc_pyramid]
-enc_pyramid_t.reverse()
-loss_recon = F.mse_loss(y,x_enc.detach())
-loss_kld = 0.01*F.l1_loss(z_norm,torch.zeros_like(z_norm))
-loss_g_all = loss_recon+loss_kld
+# x = torch.rand(1,1,32,32)
+# x_enc=morton_enc(x)
+# x = x*2-1
+# x = torch.cat([x,-x],dim=1)
+# x_enc = x_enc*2-1
+# x_enc = torch.cat([x_enc,-x_enc],dim=1)
+# enc_z_gt,z_norm,y,enc_pyramid = net_g(x_enc.detach())
+# enc_pyramid_t = [morton_dec(i).clone().detach() for i in enc_pyramid]
+# enc_pyramid_t.reverse()
+# loss_recon = F.mse_loss(y,x_enc.detach())
+# loss_kld = 0.01*F.l1_loss(z_norm,torch.zeros_like(z_norm))
+# loss_g_all = loss_recon+loss_kld
 
-optim_g.zero_grad()
-loss_g_all.backward(retain_graph=True)
+# optim_g.zero_grad()
+# loss_g_all.backward(retain_graph=True)
 
-loss_recon_1 = F.mse_loss(y,x_enc.detach())
-loss_recon_1.backward()
-optim_g.step()
+# loss_recon_1 = F.mse_loss(y,x_enc.detach())
+# loss_recon_1.backward()
+# optim_g.step()
+
+# import time
+# import morton_code
+# x = torch.rand(16,2,256,256)
+# # print(x)
+# time_start=time.time()
+# encoded = morton_code.morton_encode(x)
+# # print(encoded)
+# time_end=time.time()
+# print('time cost',time_end-time_start,'s')
+# decoded = morton_code.morton_decode(encoded)
+# print(decoded)

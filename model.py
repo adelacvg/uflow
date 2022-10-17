@@ -8,6 +8,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from morton_code import morton_encode,morton_decode
+
 from torch.nn import Conv1d, ConvTranspose1d, AvgPool1d, Conv2d
 from torch.nn.utils import weight_norm, remove_weight_norm
 import commons
@@ -114,6 +116,15 @@ class UNet(nn.Module):
         x = self.up4(x, x1)
         logits = self.outc(x)
         return logits
+
+class Adaptive_channel_adder(torch.nn.Module):
+  def __init__(self,
+      in_channels
+      ):
+     super().__init__()
+     self.conv = nn.Conv2d(in_channels,1,3,1,1)
+  def forward(self,x):
+    return self.conv(x)
 
 
 class WN(torch.nn.Module):
@@ -512,11 +523,15 @@ class GeneratorTrn(nn.Module):
     super().__init__()
     self.enc = Encoder(in_channels,expand)
     self.flow_g = FlowGenerator(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
+    self.channel_adder = Adaptive_channel_adder(in_channels-1)
   def forward(self,x,reverse=False):
+
     if reverse==False:
-      enc_z,enc_pyramid = self.enc(x)
+      x = torch.cat([x,self.channel_adder(x)],dim=1)
+      x_enc=morton_encode(x)
+      enc_z,enc_pyramid = self.enc(x_enc)
       y,z_norm = self.flow_g(enc_z)
-      return enc_z,z_norm,y,enc_pyramid
+      return enc_z,z_norm,y,enc_pyramid,x_enc,x
     else:
       enc_z,z_norm,flow_pyramid = self.flow_g(x,reverse=True)
       return enc_z,z_norm,flow_pyramid
