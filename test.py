@@ -333,3 +333,7 @@ for i in [4,8,16,32]:
 # print('time cost',time_end-time_start,'s')
 # decoded = morton_code.morton_decode(encoded)
 # print(decoded)
+
+#1.wgan loss or kld loss
+#2.tensorboard vidulization
+#3.inference

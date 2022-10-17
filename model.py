@@ -489,6 +489,9 @@ class FlowGenerator(nn.Module):
     self.flow1 = ResidualCouplingBlock(inter_channels, hidden_channels, kernel_size, dilation_rate, n_layers)
     self.flow2 = ResidualCouplingBlock(inter_channels, hidden_channels, kernel_size, dilation_rate, n_layers)
     self.upflow = ResidualUpsampleCouplingBlock(inter_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
+
+    self.fc_mu = nn.Linear(input_length, input_length)
+    self.fc_var = nn.Linear(input_length, input_length)
   def forward(self,x,reverse=False):
     """
     z : B,C,L
@@ -497,13 +500,27 @@ class FlowGenerator(nn.Module):
     flow_pyramid=None
     if reverse==False:
       z = self.flow1(x)
+
+      mu = self.fc_mu(z)
+      log_var = self.fc_var(z)
+      std = torch.exp(0.5*log_var)
+      eps = torch.rand_like(std)
+      z = mu+eps*std
+
       z_norm = z
       z = self.flow2(z)
       z = self.upflow(z)
-      return z,z_norm
+      return z,z_norm,mu,log_var
     else:
       z,flow_pyramid = self.upflow(x,reverse=True)
       z = self.flow2(z,reverse=True)
+
+      mu = self.fc_mu(z)
+      log_var = self.fc_var(z)
+      std = torch.exp(0.5*log_var)
+      eps = torch.rand_like(std)
+      z = mu+eps*std
+      
       z_norm=z
       z = self.flow1(z,reverse=True)
       return z,z_norm,flow_pyramid
@@ -523,15 +540,15 @@ class GeneratorTrn(nn.Module):
     super().__init__()
     self.enc = Encoder(in_channels,expand)
     self.flow_g = FlowGenerator(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
-    self.channel_adder = Adaptive_channel_adder(in_channels-1)
+    # self.channel_adder = Adaptive_channel_adder(in_channels-1)
   def forward(self,x,reverse=False):
 
     if reverse==False:
-      x = torch.cat([x,self.channel_adder(x)],dim=1)
+      x = torch.cat([x,-x],dim=1)
       x_enc=morton_encode(x)
       enc_z,enc_pyramid = self.enc(x_enc)
-      y,z_norm = self.flow_g(enc_z)
-      return enc_z,z_norm,y,enc_pyramid,x_enc,x
+      y,z_norm,mu,log_var = self.flow_g(enc_z)
+      return enc_z,z_norm,y,enc_pyramid,x_enc,x,mu,log_var
     else:
       enc_z,z_norm,flow_pyramid = self.flow_g(x,reverse=True)
       return enc_z,z_norm,flow_pyramid

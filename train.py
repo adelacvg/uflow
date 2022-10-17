@@ -109,17 +109,16 @@ def run(hps):
       x = x.to(device)
       x = x*2-1
       with autocast(enabled=hps.train.fp16_run):
-        enc_z_gt,z_norm,y,enc_pyramid,x_enc,x = net_g(x.detach())
+        enc_z_gt,z_norm,y,enc_pyramid,x_enc,x,mu,log_var = net_g(x.detach())
         enc_pyramid_t = [morton_decode(i).clone().detach() for i in enc_pyramid]
         enc_pyramid_t.reverse()
         # print(enc_pyramid[0].shape)
         with autocast(enabled=False):
           loss_recon = F.mse_loss(y,x_enc.detach())
-          if epoch<500:
-            loss_kld = 0.0001*F.l1_loss(z_norm,torch.zeros_like(z_norm))
-          else:
-            loss_kld =  0.00001*F.l1_loss(z_norm,torch.zeros_like(z_norm))
-          loss_g_all = loss_recon+loss_kld
+          mu = mu.view(mu.shape[0]*mu.shape[1],mu.shape[2])
+          log_var = log_var.view(log_var.shape[0]*log_var.shape[1],log_var.shape[2])
+          loss_kld = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+          loss_g_all = loss_recon+hps.train.kld_weight*loss_kld
 
       optim_g.zero_grad()
       loss_g_all.backward(retain_graph=True)
@@ -139,7 +138,7 @@ def run(hps):
         enc_z = morton_decode(enc_z).to(device).clone()
         enc_z_gt = morton_decode(enc_z_gt).to(device).clone()
         y_dec,y_pyramid = net_d(enc_z,flow_pyramid_t)
-        y_dec_gt,y_pyramid_gt = net_d(enc_z,flow_pyramid_t)
+        y_dec_gt,y_pyramid_gt = net_d(enc_z_gt,flow_pyramid_t)
         with autocast(enabled=False):
           for i,yy in enumerate(y_pyramid):
             loss_pyramid=loss_pyramid + torch.abs(yy-enc_pyramid_t[i].detach()).mean()

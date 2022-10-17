@@ -13,7 +13,8 @@
     "init_lr_ratio": 1,
     "warmup_epochs": 0,
     "c_mel": 45,
-    "c_kl": 1.0
+    "c_kl": 1.0,
+    "kld_weight":0.00025
   },
   "data": {
   },
