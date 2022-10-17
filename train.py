@@ -23,6 +23,7 @@ import json
 import argparse
 import itertools
 import math
+import numpy as np
 
 device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 # device = 'cpu'
@@ -99,7 +100,7 @@ def run(hps):
   scaler = GradScaler(enabled=hps.train.fp16_run)
 
   # hps.train.epochs=1
-  train_loader = [next(iter(train_loader))]
+  # train_loader = [next(iter(train_loader))]
   
 
 
@@ -159,6 +160,7 @@ def run(hps):
       optim_g.step()
 
       if global_step%hps.train.log_interval == 0:
+        pic_list=[]
         y0,y1=torch.split(y,[1,1],dim=1)
         y0 = (y0+1)/2
         y0 = morton_dec(y0)
@@ -183,7 +185,50 @@ def run(hps):
           global_step=global_step,
           images=image_dict,
           scalars=scalar_dict)
-      if global_step%hps.train.eval_interval==0:
+
+        for i in enc_pyramid_t:
+            i0,i1=torch.split(i,[1,1],dim=1)
+            image=i0[0].data.cpu().numpy()
+            image=transforms.ToPILImage()(torch.from_numpy(image))
+            image=transforms.functional.resize(image, [32,32], interpolation=2)
+            image=transforms.ToTensor()(image)
+            image=image.numpy()
+            pic_list.append(image)
+        for i in y_pyramid:
+            i0,i1=torch.split(i,[1,1],dim=1)
+            image=i0[0].data.cpu().numpy()
+            image=transforms.ToPILImage()(torch.from_numpy(image))
+            image=transforms.functional.resize(image, [32,32], interpolation=2)
+            image=transforms.ToTensor()(image)
+            image=image.numpy()
+            pic_list.append(image)
+        for i in y_pyramid_gt:
+            i0,i1=torch.split(i,[1,1],dim=1)
+            image=i0[0].data.cpu().numpy()
+            image=transforms.ToPILImage()(torch.from_numpy(image))
+            image=transforms.functional.resize(image, [32,32], interpolation=2)
+            image=transforms.ToTensor()(image)
+            image=image.numpy()
+            pic_list.append(image)
+
+        output_list=[enc_z, enc_z_gt, y_dec, y_dec_gt]
+
+        pic_y=np.reshape(y0[0].data.cpu().numpy(),(1,32,32))
+        pic_list.append(pic_y)
+
+        for i in output_list:
+            i0,i1=torch.split(i,[1,1],dim=1)
+            image=i0[0].data.cpu().numpy()
+            image=transforms.ToPILImage()(torch.from_numpy(image))
+            image=transforms.functional.resize(image, [32,32], interpolation=2)
+            image=transforms.ToTensor()(image)
+            image=image.numpy()
+            pic_list.append(image)
+        pic_list=np.array(pic_list)
+        images = np.reshape(pic_list[0:], (len(pic_list), 1, 32, 32))
+        writer.add_images('test__', images, global_step=global_step)
+
+      if global_step%hps.train.eval_interval==0 and global_step!=0:
         utils.save_checkpoint(net_g, optim_g, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "G_{}.pth".format(global_step)))
         utils.save_checkpoint(net_d, optim_d, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "D_{}.pth".format(global_step)))
       #   pass
