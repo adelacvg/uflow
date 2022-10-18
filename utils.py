@@ -9,6 +9,8 @@ import numpy as np
 from scipy.io.wavfile import read
 import torch
 
+from morton_code import morton_decode
+
 MATPLOTLIB_FLAG = False
 
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -140,10 +142,61 @@ def plot_image_to_numpy(img):
   import matplotlib.pylab as plt
   import numpy as np
 
+  img = img[0]
+  if img.shape[0]%2==0:
+    half_channel = img.shape[0]//2
+    img,_=torch.split(img,[half_channel,half_channel],dim=0)
+  if len(img.shape)==2:
+    img = img.unsqueeze(0)
+    img = morton_decode(img)
+    img = img.squeeze(0)
+  img = (img+1)/2
+  img = img.data.cpu().numpy()
+
   fig, ax = plt.subplots(figsize=(4,4))
   img = np.transpose(img,(1,2,0))
-  im = ax.imshow(img, cmap='gray',aspect='auto',origin='lower',interpolation='none')
-  fig.colorbar(im,ax=ax)
+  if img.shape[2]==1:
+    im = ax.imshow(img, cmap='gray',aspect='auto',interpolation='none')
+  else:
+    im = ax.imshow(img, aspect='auto',interpolation='none')
+  # fig.colorbar(im,ax=ax)
+  fig.canvas.draw()
+  data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
+  data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+  plt.close()
+  return data
+
+def plot_images_to_numpy(imgs):
+  global MATPLOTLIB_FLAG
+  if not MATPLOTLIB_FLAG:
+    import matplotlib
+    matplotlib.use("Agg")
+    MATPLOTLIB_FLAG = True
+    mpl_logger = logging.getLogger('matplotlib')
+    mpl_logger.setLevel(logging.WARNING)
+  import matplotlib.pylab as plt
+  import numpy as np
+
+  img_nums = len(imgs)
+  fig, axs = plt.subplots(1,img_nums,figsize=(4*img_nums,4))
+  for i,ax in enumerate(axs):
+    img = imgs[i][0]
+    if img.shape[0]%2==0:
+      half_channel = img.shape[0]//2
+      img,_=torch.split(img,[half_channel,half_channel],dim=0)
+    if len(img.shape)==2:
+      img = img.unsqueeze(0)
+      img = morton_decode(img)
+      img = img.squeeze(0)
+    img = (img+1)/2
+    img = img.data.cpu().numpy()
+
+    img = np.transpose(img,(1,2,0))
+    if img.shape[2]==1:
+      im = ax.imshow(img, cmap='gray',aspect='auto',interpolation='none')
+    else:
+      im = ax.imshow(img, aspect='auto',origin='lower',interpolation='none')
+  # fig.colorbar(im,ax=ax)
   fig.canvas.draw()
   data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
   data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))

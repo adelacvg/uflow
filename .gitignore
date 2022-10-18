@@ -2,3 +2,6 @@ logs/
 data/
 *.png
 __pycache__/
+morton_code/*.c
+morton_code/build
+morton_code/morton_code

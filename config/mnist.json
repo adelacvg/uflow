@@ -18,7 +18,7 @@
   },
   "data": {
   },
-  "model": {
+  "net_g": {
     "in_channels": 2,
     "hidden_channels": 128,
     "n_layers": 4,
@@ -27,6 +27,16 @@
     "scale_factor": 4,
     "dilation_rate": 1,
     "expand":false,
+    "input_length": 16
+  },
+  "net_d":{
+    "in_channels":2,
+    "hidden_channels": 128,
+    "n_layers": 4,
+    "n_uplayers": 3,
+    "kernel_size": 3,
+    "scale_factor": 4,
+    "dilation_rate": 1,
     "input_length": 16
   }
 }

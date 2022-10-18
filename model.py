@@ -14,117 +14,126 @@ from torch.nn import Conv1d, ConvTranspose1d, AvgPool1d, Conv2d
 from torch.nn.utils import weight_norm, remove_weight_norm
 import commons
 
-class DoubleConv(nn.Module):
-    """(convolution => [BN] => ReLU) * 2"""
+def nonlinearity(x):
+    # swish
+    return x*torch.sigmoid(x)
+def Normalize(in_channels, num_groups=1):
+    return torch.nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
 
-    def __init__(self, in_channels, out_channels, mid_channels=None):
+
+class Upsample(nn.Module):
+    def __init__(self, in_channels, with_conv):
         super().__init__()
-        if not mid_channels:
-            mid_channels = out_channels
-        self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
-        )
+        self.with_conv = with_conv
+        if self.with_conv:
+            self.conv = torch.nn.Conv2d(in_channels,
+                                        in_channels,
+                                        kernel_size=3,
+                                        stride=1,
+                                        padding=1)
 
     def forward(self, x):
-        return self.double_conv(x)
+        x = torch.nn.functional.interpolate(x, scale_factor=2.0, mode="nearest")
+        if self.with_conv:
+            x = self.conv(x)
+        return x
 
 
-class Down(nn.Module):
-    """Downscaling with maxpool then double conv"""
-
-    def __init__(self, in_channels, out_channels):
+class ResnetBlock(nn.Module):
+    def __init__(self, *, in_channels, out_channels=None, conv_shortcut=False,
+                 dropout, temb_channels=512):
         super().__init__()
-        self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(2),
-            DoubleConv(in_channels, out_channels)
-        )
+        self.in_channels = in_channels
+        out_channels = in_channels if out_channels is None else out_channels
+        self.out_channels = out_channels
+        self.use_conv_shortcut = conv_shortcut
 
-    def forward(self, x):
-        return self.maxpool_conv(x)
+        self.norm1 = Normalize(in_channels)
+        self.conv1 = torch.nn.Conv2d(in_channels,
+                                     out_channels,
+                                     kernel_size=3,
+                                     stride=1,
+                                     padding=1)
+        if temb_channels > 0:
+            self.temb_proj = torch.nn.Linear(temb_channels,
+                                             out_channels)
+        self.norm2 = Normalize(out_channels)
+        self.dropout = torch.nn.Dropout(dropout)
+        self.conv2 = torch.nn.Conv2d(out_channels,
+                                     out_channels,
+                                     kernel_size=3,
+                                     stride=1,
+                                     padding=1)
+        if self.in_channels != self.out_channels:
+            if self.use_conv_shortcut:
+                self.conv_shortcut = torch.nn.Conv2d(in_channels,
+                                                     out_channels,
+                                                     kernel_size=3,
+                                                     stride=1,
+                                                     padding=1)
+            else:
+                self.nin_shortcut = torch.nn.Conv2d(in_channels,
+                                                    out_channels,
+                                                    kernel_size=1,
+                                                    stride=1,
+                                                    padding=0)
 
+    def forward(self, x, temb):
+        h = x
+        h = self.norm1(h)
+        h = nonlinearity(h)
+        h = self.conv1(h)
 
-class Up(nn.Module):
-    """Upscaling then double conv"""
+        if temb is not None:
+            h = h + self.temb_proj(nonlinearity(temb))[:,:,None,None]
 
-    def __init__(self, in_channels, out_channels, bilinear=True):
+        h = self.norm2(h)
+        h = nonlinearity(h)
+        h = self.dropout(h)
+        h = self.conv2(h)
+
+        if self.in_channels != self.out_channels:
+            if self.use_conv_shortcut:
+                x = self.conv_shortcut(x)
+            else:
+                x = self.nin_shortcut(x)
+
+        return x+h
+
+class SimpleDecoder(nn.Module):
+    def __init__(self, in_channels, out_channels, *args, **kwargs):
         super().__init__()
-
-        # if bilinear, use the normal convolutions to reduce the number of channels
-        if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
-        else:
-            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels)
-
-    def forward(self, x1, x2):
-        x1 = self.up(x1)
-        # input is CHW
-        diffY = x2.size()[2] - x1.size()[2]
-        diffX = x2.size()[3] - x1.size()[3]
-
-        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
-                        diffY // 2, diffY - diffY // 2])
-        # if you have padding issues, see
-        # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
-        # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
-        x = torch.cat([x2, x1], dim=1)
-        return self.conv(x)
-
-
-class OutConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.model = nn.ModuleList([nn.Conv2d(in_channels, in_channels, 1),
+                                     ResnetBlock(in_channels=in_channels,
+                                                 out_channels=2 * in_channels,
+                                                 temb_channels=0, dropout=0.0),
+                                     ResnetBlock(in_channels=2 * in_channels,
+                                                out_channels=4 * in_channels,
+                                                temb_channels=0, dropout=0.0),
+                                     ResnetBlock(in_channels=4 * in_channels,
+                                                out_channels=2 * in_channels,
+                                                temb_channels=0, dropout=0.0),
+                                     nn.Conv2d(2*in_channels, in_channels, 1),])
+                                    #  Upsample(in_channels, with_conv=True)])
+        # end
+        self.norm_out = Normalize(in_channels)
+        self.conv_out = torch.nn.Conv2d(in_channels,
+                                        out_channels,
+                                        kernel_size=3,
+                                        stride=1,
+                                        padding=1)
 
     def forward(self, x):
-        return self.conv(x)
+        for i, layer in enumerate(self.model):
+            if i in [1,2,3]:
+                x = layer(x, None)
+            else:
+                x = layer(x)
 
-class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False):
-        super(UNet, self).__init__()
-        self.n_channels = n_channels
-        self.n_classes = n_classes
-        self.bilinear = bilinear
-
-        self.inc = DoubleConv(n_channels, 64)
-        self.down1 = Down(64, 128)
-        self.down2 = Down(128, 256)
-        self.down3 = Down(256, 512)
-        factor = 2 if bilinear else 1
-        self.down4 = Down(512, 1024 // factor)
-        self.up1 = Up(1024, 512 // factor, bilinear)
-        self.up2 = Up(512, 256 // factor, bilinear)
-        self.up3 = Up(256, 128 // factor, bilinear)
-        self.up4 = Up(128, 64, bilinear)
-        self.outc = OutConv(64, n_classes)
-
-    def forward(self, x):
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
-        logits = self.outc(x)
-        return logits
-
-class Adaptive_channel_adder(torch.nn.Module):
-  def __init__(self,
-      in_channels
-      ):
-     super().__init__()
-     self.conv = nn.Conv2d(in_channels,1,3,1,1)
-  def forward(self,x):
-    return self.conv(x)
+        h = self.norm_out(x)
+        h = nonlinearity(h)
+        x = self.conv_out(h)
+        return x
 
 
 class WN(torch.nn.Module):
@@ -392,11 +401,12 @@ class ResidualUpsampleCouplingBlock(nn.Module):
   def forward(self, x, reverse=False):
     flow_pyramid=[]
     if not reverse:
-      # print(self.flows.size())
-      for flow in self.flows:
+      for i,flow in enumerate(self.flows):
+        if i%3==0:
+          flow_pyramid.append(x)
         x = flow(x, reverse=reverse)
-        # print(x.shape)
-      return x
+      flow_pyramid.append(x)
+      return x,flow_pyramid
     else:
       for i,flow in enumerate(reversed(self.flows)):
         if i%3==0:
@@ -436,40 +446,47 @@ class ResidualConv1d(nn.Module):
 class Encoder(nn.Module):
   def __init__(self,
       in_channels,
-      expand
+      hidden_channels,
+      kernel_size,
+      scale_factor,
+      dilation_rate,
+      n_layers,
+      n_uplayers,
+      input_length
       ) -> None:
-    super().__init__()
-    self.in_channels=in_channels
-    self.expand=expand
-    modules = []
-    t = in_channels
-    hidden_dims=[32,64,128,256]
-    self.pre = nn.Sequential(ResidualConv1d(in_channels,4*in_channels,25,4,12),
-                            ResidualConv1d(in_channels*4,in_channels,25,1,12))
-    for h_dim in hidden_dims:
-      modules.append(
-        nn.Sequential(
-          ResidualConv1d(in_channels,h_dim,9,2,4),
-          ResidualConv1d(h_dim,in_channels,9,1,4),
-        )
-      )
-    # modules.append(ResidualConv1d(in_channels,1,9,1,4))
-    self.convs = nn.ModuleList(modules)
-  def forward(self, x):
-    #output B,256,16
-    #B,C,T
-    enc_pyramid = []
-    enc_pyramid.append(x)
-    x = self.pre(x)
-    enc_pyramid.append(x)
-    for i,c in enumerate(self.convs):
-      # print(i)
-      x = c(x)
-      if i%2==1:
-        # print(len(enc_pyramid))
-        enc_pyramid.append(x)
-    return x,enc_pyramid
-    
+      super().__init__()
+      self.upflow = ResidualUpsampleCouplingBlock(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
+  def forward(self, x, reverse=False):
+    if reverse==False:
+      x,flow_pyramid = self.upflow(x)
+    else:
+      x,flow_pyramid = self.upflow(x,reverse=reverse)
+
+    return x,flow_pyramid
+
+class Decoder(nn.Module):
+  def __init__(self,
+      in_channels,
+      hidden_channels,
+      kernel_size,
+      scale_factor,
+      dilation_rate,
+      n_layers,
+      n_uplayers,
+      input_length
+      ) -> None:
+      super().__init__()
+      self.upflow = ResidualUpsampleCouplingBlock(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
+      self.post = SimpleDecoder(in_channels,in_channels)
+  def forward(self, x, unet_pyramid, reverse=False):
+    if reverse==False:
+      x,flow_pyramid = self.upflow(x)
+      x_post = self.post(morton_decode(x))
+      return x,flow_pyramid,x_post
+    else:
+      x,flow_pyramid = self.upflow(x,reverse=reverse)
+      return x,flow_pyramid
+
 
 class FlowGenerator(nn.Module):
   """
@@ -501,6 +518,8 @@ class FlowGenerator(nn.Module):
     if reverse==False:
       z = self.flow1(x)
 
+      mu=0
+      log_var=0
       mu = self.fc_mu(z)
       log_var = self.fc_var(z)
       std = torch.exp(0.5*log_var)
@@ -509,8 +528,8 @@ class FlowGenerator(nn.Module):
 
       z_norm = z
       z = self.flow2(z)
-      z = self.upflow(z)
-      return z,z_norm,mu,log_var
+      z,flow_pyramid = self.upflow(z)
+      return z,z_norm,mu,log_var,flow_pyramid
     else:
       z,flow_pyramid = self.upflow(x,reverse=True)
       z = self.flow2(z,reverse=True)
@@ -538,167 +557,22 @@ class GeneratorTrn(nn.Module):
       input_length
     ) -> None:
     super().__init__()
-    self.enc = Encoder(in_channels,expand)
+    self.enc = Encoder(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
     self.flow_g = FlowGenerator(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
-    # self.channel_adder = Adaptive_channel_adder(in_channels-1)
   def forward(self,x,reverse=False):
 
     if reverse==False:
       x = torch.cat([x,-x],dim=1)
       x_enc=morton_encode(x)
-      enc_z,enc_pyramid = self.enc(x_enc)
-      y,z_norm,mu,log_var = self.flow_g(enc_z)
-      return enc_z,z_norm,y,enc_pyramid,x_enc,x,mu,log_var
+      enc_z,flow1_pyramid = self.enc(x_enc,reverse=True)
+      y,z_norm,mu,log_var,flow2_pyramid = self.flow_g(enc_z)
+      return enc_z,z_norm,y,flow1_pyramid,x_enc,x,mu,log_var,flow2_pyramid
     else:
-      enc_z,z_norm,flow_pyramid = self.flow_g(x,reverse=True)
-      return enc_z,z_norm,flow_pyramid
-
-def nonlinearity(x):
-    # swish
-    return x*torch.sigmoid(x)
-def Normalize(in_channels, num_groups=1):
-    return torch.nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
+      enc_z,z_norm,flow2_pyramid = self.flow_g(x,reverse=True)
+      x_reverse,flow1_pyramid=self.enc(enc_z,reverse=True)
+      return x_reverse,enc_z,z_norm,flow1_pyramid,flow2_pyramid
 
 
-class Upsample(nn.Module):
-    def __init__(self, in_channels, with_conv):
-        super().__init__()
-        self.with_conv = with_conv
-        if self.with_conv:
-            self.conv = torch.nn.Conv2d(in_channels,
-                                        in_channels,
-                                        kernel_size=3,
-                                        stride=1,
-                                        padding=1)
-
-    def forward(self, x):
-        x = torch.nn.functional.interpolate(x, scale_factor=2.0, mode="nearest")
-        if self.with_conv:
-            x = self.conv(x)
-        return x
-
-
-class ResnetBlock(nn.Module):
-    def __init__(self, *, in_channels, out_channels=None, conv_shortcut=False,
-                 dropout, temb_channels=512):
-        super().__init__()
-        self.in_channels = in_channels
-        out_channels = in_channels if out_channels is None else out_channels
-        self.out_channels = out_channels
-        self.use_conv_shortcut = conv_shortcut
-
-        self.norm1 = Normalize(in_channels)
-        self.conv1 = torch.nn.Conv2d(in_channels,
-                                     out_channels,
-                                     kernel_size=3,
-                                     stride=1,
-                                     padding=1)
-        if temb_channels > 0:
-            self.temb_proj = torch.nn.Linear(temb_channels,
-                                             out_channels)
-        self.norm2 = Normalize(out_channels)
-        self.dropout = torch.nn.Dropout(dropout)
-        self.conv2 = torch.nn.Conv2d(out_channels,
-                                     out_channels,
-                                     kernel_size=3,
-                                     stride=1,
-                                     padding=1)
-        if self.in_channels != self.out_channels:
-            if self.use_conv_shortcut:
-                self.conv_shortcut = torch.nn.Conv2d(in_channels,
-                                                     out_channels,
-                                                     kernel_size=3,
-                                                     stride=1,
-                                                     padding=1)
-            else:
-                self.nin_shortcut = torch.nn.Conv2d(in_channels,
-                                                    out_channels,
-                                                    kernel_size=1,
-                                                    stride=1,
-                                                    padding=0)
-
-    def forward(self, x, temb):
-        h = x
-        h = self.norm1(h)
-        h = nonlinearity(h)
-        h = self.conv1(h)
-
-        if temb is not None:
-            h = h + self.temb_proj(nonlinearity(temb))[:,:,None,None]
-
-        h = self.norm2(h)
-        h = nonlinearity(h)
-        h = self.dropout(h)
-        h = self.conv2(h)
-
-        if self.in_channels != self.out_channels:
-            if self.use_conv_shortcut:
-                x = self.conv_shortcut(x)
-            else:
-                x = self.nin_shortcut(x)
-
-        return x+h
-
-class SimpleDecoder(nn.Module):
-    def __init__(self, in_channels, out_channels, *args, **kwargs):
-        super().__init__()
-        self.model = nn.ModuleList([nn.Conv2d(in_channels, in_channels, 1),
-                                     ResnetBlock(in_channels=in_channels,
-                                                 out_channels=2 * in_channels,
-                                                 temb_channels=0, dropout=0.0),
-                                     ResnetBlock(in_channels=2 * in_channels,
-                                                out_channels=4 * in_channels,
-                                                temb_channels=0, dropout=0.0),
-                                     ResnetBlock(in_channels=4 * in_channels,
-                                                out_channels=2 * in_channels,
-                                                temb_channels=0, dropout=0.0),
-                                     nn.Conv2d(2*in_channels, in_channels, 1),
-                                     Upsample(in_channels, with_conv=True)])
-        # end
-        self.norm_out = Normalize(in_channels)
-        self.conv_out = torch.nn.Conv2d(in_channels,
-                                        out_channels,
-                                        kernel_size=3,
-                                        stride=1,
-                                        padding=1)
-
-    def forward(self, x):
-        for i, layer in enumerate(self.model):
-            if i in [1,2,3]:
-                x = layer(x, None)
-            else:
-                x = layer(x)
-
-        h = self.norm_out(x)
-        h = nonlinearity(h)
-        x = self.conv_out(h)
-        return x
-
-class Decoder(nn.Module):
-  def __init__(self,
-      in_channels,
-      out_channels,
-      ) -> None:
-     super().__init__()
-     self.model = nn.ModuleList([
-      SimpleDecoder(in_channels*2,in_channels),
-      SimpleDecoder(in_channels*2,in_channels),
-      SimpleDecoder(in_channels*2,in_channels)
-     ])
-  def forward(self, x,unet_pyramid):
-    x_pyramid=[]
-    x_pyramid.append(x)
-    for i,layer in enumerate(self.model):
-      x = torch.cat([x,unet_pyramid[i]],dim=1)
-      x = layer(x)
-      x_pyramid.append(x)
-    return x,x_pyramid
-
-class Decoder_test(nn.Module):
-  def __init__(self) -> None:
-     super().__init__()
-  def forward(self,x):
-    return x
 
 #√
 class Hierarchy_flow(nn.Module):
@@ -846,59 +720,3 @@ class reverse_hierarchy_flow(nn.Module):
         a = a.repeat_interleave(l//(1 << i), dim=2)
         x = x+a
     return x
-
-#√
-class Morton_encode(nn.Module):
-  def forward(self, x):
-    l = x.shape[2]**2
-    bit_l = l.bit_length()
-    ret = torch.zeros(x.shape[0],x.shape[1],l)
-    for b in range(x.shape[0]):
-      for c in range(x.shape[1]):
-        for i in range(x.shape[2]):
-          for j in range(x.shape[2]):
-            ij=0
-            for bit in range(bit_l):
-              if bit%2==1:
-                ij=ij+(((i>>(bit//2))&1)<<bit)
-              else:
-                ij=ij+(((j>>(bit//2))&1)<<bit)
-            ret[b][c][ij]=x[b][c][i][j]
-    return ret
-
-#√
-class Morton_decode(nn.Module):
-  def forward(self, x):
-    # print(x.shape)
-    l = x.shape[2]
-    bit_l = l.bit_length()
-    ret = torch.zeros_like(x)
-    ret=ret.view(x.shape[0],x.shape[1],int(math.sqrt(l)),int(math.sqrt(l)))
-    for b in range(x.shape[0]):
-      for c in range(x.shape[1]):
-        for ij in range(l):
-          i=0
-          j=0
-          for bit in range(bit_l):
-            if bit % 2==1:
-              i=i+(((ij>>bit)&1)<<(bit//2))
-            else:
-              j=j+(((ij>>bit)&1)<<(bit//2))
-          ret[b][c][i][j]=x[b][c][ij]
-    return ret
-
-#√
-class Upsample_flow(nn.Module): 
-  def forward(self, x, s, scale_factor=4, inverse=False):
-    l = x.shape[0]
-    assert(s.shape[0] == l*scale_factor)
-    if inverse==True:
-      x=x-s
-      downsampled = nn.AvgPool1d(scale_factor,stride=scale_factor)
-      ret = downsampled
-    else:
-      upsampled = x.repeat_interleave(scale_factor)
-      upsampled = upsampled+s
-      ret = upsampled
-    return ret
-  

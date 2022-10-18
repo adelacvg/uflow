@@ -266,9 +266,9 @@ w=4
 # print('!')
 # d = Decoder(2,2)
 # x = torch.rand(1,2,4,4)
-flow_pyramid=[]
-for i in [4,8,16,32]:
-  flow_pyramid.append(torch.rand(1,2,i,i))
+# flow_pyramid=[]
+# for i in [4,8,16,32]:
+#   flow_pyramid.append(torch.rand(1,2,i,i))
 # y,y_pyramid = d(x,flow_pyramid)
 # print(y.shape)
 # for i in y_pyramid:
@@ -334,6 +334,9 @@ for i in [4,8,16,32]:
 # decoded = morton_code.morton_decode(encoded)
 # print(decoded)
 
-#1.wgan loss or kld loss
-#2.tensorboard vidulization
+#1.wgan loss or kld loss √
+#2.tensorboard vidulization √
+
+#1.post unet
+#2.decoder unet
 #3.inference
