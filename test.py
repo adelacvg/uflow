@@ -5,9 +5,10 @@ import torch
 import torchvision
 from torch.nn import functional as F
 from torch import nn
-from model import Decoder, Encoder, GeneratorTrn, Hierarchy_flow, Morton_decode, ResidualConv1d, ResidualCouplingBlock, ResidualCouplingHierarchyBlock, ResidualUpsampleCouplingLayer,ResidualUpsampleCouplingBlock, SimpleDecoder
-from model import Morton_encode
+from model import Decoder, Encoder, GeneratorTrn, Hierarchy_flow, ResidualConv1d, ResidualCouplingBlock, ResidualCouplingHierarchyBlock, ResidualUpsampleCouplingLayer,ResidualUpsampleCouplingBlock, SimpleDecoder
 import pymorton as pm
+
+import utils
 
 # input x   std s
 
@@ -337,6 +338,44 @@ w=4
 #1.wgan loss or kld loss √
 #2.tensorboard vidulization √
 
-#1.post unet
-#2.decoder unet
+#1.post unet 
+#2.decoder unet √
 #3.inference
+
+from torchvision import models
+from torchsummary import summary
+
+net_g = GeneratorTrn(
+    in_channels= 2,
+    hidden_channels= 128,
+    n_layers= 4,
+    n_uplayers= 3,
+    kernel_size= 3,
+    scale_factor= 4,
+    dilation_rate= 1,
+    expand=False,
+    input_length=16)
+
+net_d = Decoder(in_channels= 2,
+    hidden_channels= 128,
+    n_layers= 4,
+    n_uplayers= 3,
+    kernel_size= 3,
+    scale_factor= 4,
+    dilation_rate= 1,
+    input_length=16)
+for name, p in net_g.named_parameters():
+  if p.requires_grad:
+    if p.numel()>1000000:
+      print(name)
+      print(p.numel())
+x =  sum(p.numel() for p in net_g.parameters() if p.requires_grad)
+# print(x)
+
+for name, p in net_d.named_parameters():
+  if p.requires_grad:
+    if p.numel()>1000000:
+      print(name)
+      print(p.numel())
+x =  sum(p.numel() for p in net_d.parameters() if p.requires_grad)
+# print(x)

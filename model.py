@@ -291,7 +291,7 @@ class ResidualUpsampleCouplingLayer(nn.Module):
     self.post = nn.Conv1d(hidden_channels, self.half_channels, 1)
     self.post.weight.data.zero_()
     self.post.bias.data.zero_()
-    self.proj = nn.Linear(self.input_length,self.input_length*self.scale_factor)
+    # self.proj = nn.Linear(self.input_length,self.input_length*self.scale_factor)
 
     self.pre1 = nn.Conv1d(self.half_channels, hidden_channels, 1)
     self.enc1 = WN(hidden_channels, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout)
@@ -303,7 +303,7 @@ class ResidualUpsampleCouplingLayer(nn.Module):
     self.pool1 = nn.AvgPool1d(self.scale_factor,stride=self.scale_factor)
 
   #x: B,C,T
-  def forward(self, x, scale_factor=4, reverse=False):
+  def forward(self, x, scale_factor, reverse=False):
     x0, x1 = torch.split(x, [self.half_channels]*2, 1)
     # assert(s.shape[2] == l*self.scale_factor)
     if reverse==True:
@@ -314,16 +314,15 @@ class ResidualUpsampleCouplingLayer(nn.Module):
       s1 = self.pre(downsampled_x0)
       s1 = self.enc(s1)
       s1 = self.post(s1)
-      s1 = self.proj(s1)
-      # s1 = s1.tranpose(0,1)
+      s1 = s1.repeat_interleave(scale_factor,dim=2)
       downsampled_x1 = self.pool1(x1-s1)
       ret = torch.cat([downsampled_x0,downsampled_x1],1)
     else:
       s1 = self.pre(x0)
       s1 = self.enc(s1)
       s1 = self.post(s1)
-      s1 = self.proj(s1)
-      # s1 = s1.tranpose(0,1)
+      s1 = torch.repeat_interleave(s1,self.scale_factor,dim=2)
+      # s1 = self.proj(s1)
       upsampled_x1 = x1.repeat_interleave(scale_factor,dim=2) + s1
       s2 = self.pre1(upsampled_x1)
       s2 = self.enc1(s2)
@@ -398,20 +397,29 @@ class ResidualUpsampleCouplingBlock(nn.Module):
       self.flows.append(Flip())
       self.flows.append(ResidualCouplingHierarchyBlock(channels,hidden_channels,kernel_size,dilation_rate,n_layers,1,input_length*(scale_factor**(i+1))))
 
-  def forward(self, x, reverse=False):
+  def forward(self, x, unet_pyramid=None,reverse=False):
     flow_pyramid=[]
-    if not reverse:
+    if reverse==False:
       for i,flow in enumerate(self.flows):
         if i%3==0:
           flow_pyramid.append(x)
-        x = flow(x, reverse=reverse)
+          if unet_pyramid!=None:
+            x0,x1 = torch.split(x,[self.channels//2,self.channels//2],dim=1)
+            u0,u1 = torch.split(unet_pyramid[i//3],[self.channels//2,self.channels//2],dim=1)
+            x = torch.cat([(x0+u0)/2,(x1+u1)/2],dim=1)
+          x = flow(x, scale_factor=self.scale_factor,reverse=reverse)
+        else:
+          x = flow(x, reverse=reverse)
       flow_pyramid.append(x)
       return x,flow_pyramid
     else:
       for i,flow in enumerate(reversed(self.flows)):
         if i%3==0:
           flow_pyramid.append(x)
-        x = flow(x, reverse=reverse)
+        if i%3==2:
+          x = flow(x, scale_factor=self.scale_factor,reverse=reverse)
+        else:
+          x = flow(x, reverse=reverse)
       flow_pyramid.append(x)
       return x,flow_pyramid
 
@@ -480,7 +488,7 @@ class Decoder(nn.Module):
       self.post = SimpleDecoder(in_channels,in_channels)
   def forward(self, x, unet_pyramid, reverse=False):
     if reverse==False:
-      x,flow_pyramid = self.upflow(x)
+      x,flow_pyramid = self.upflow(x,unet_pyramid)
       x_post = self.post(morton_decode(x))
       return x,flow_pyramid,x_post
     else:
@@ -553,7 +561,6 @@ class GeneratorTrn(nn.Module):
       dilation_rate,
       n_layers,
       n_uplayers,
-      expand,
       input_length
     ) -> None:
     super().__init__()
@@ -569,7 +576,8 @@ class GeneratorTrn(nn.Module):
       return enc_z,z_norm,y,flow1_pyramid,x_enc,x,mu,log_var,flow2_pyramid
     else:
       enc_z,z_norm,flow2_pyramid = self.flow_g(x,reverse=True)
-      x_reverse,flow1_pyramid=self.enc(enc_z,reverse=True)
+      # print(enc_z.shape)
+      x_reverse,flow1_pyramid=self.enc(enc_z)
       return x_reverse,enc_z,z_norm,flow1_pyramid,flow2_pyramid
 
 
@@ -592,47 +600,46 @@ class Hierarchy_flow(nn.Module):
     self.half_channel = input_channel//2
     self.pre = nn.Conv1d(self.half_channel,hidden_channel,1)
     self.enc = WN(hidden_channel, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout)
+    self.enc2 = WN(hidden_channel, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout)
     self.proj = nn.Conv1d(self.hidden_channel, self.half_channel, 1)
-    self.proj.weight.data.zero_()
-    self.proj.bias.data.zero_()
-    self.proj_layer = nn.Linear(self.input_length,self.input_length*2-1)
+    self.proj2 = nn.Conv1d(self.hidden_channel, self.half_channel, 1)
+    # self.proj.weight.data.zero_()
+    # self.proj.bias.data.zero_()
+    # self.proj2.weight.data.zero_()
+    # self.proj2.bias.data.zero_()
+    # self.proj_layer = nn.Linear(self.input_length,self.input_length*2-1)
 
   #x: B,C,T
   def forward(self, x, reverse=False):
     #x0:B,C/2,T
     x0,x1 = torch.split(x,[self.half_channel]*2,1)
-    # print(x0)
     l = int(x1.shape[2])
     s = x0
     s = self.pre(s)
-    s = self.enc(s)
-    s = self.proj(s)
-    s = self.proj_layer(s)
+    s1 = self.enc(s)
+    s1 = self.proj(s1)
+    s2 = self.enc2(s)
+    s2 = self.proj2(s2)
+    s = torch.cat([s1,s2],dim=2)
     #s: B,C/2,2*T-1
     # assert((l & (l-torch.tensor(1)) == 0) and l != 0)
     # assert(s.shape[0] == 2*l-1)
-    # print(l)
     bit_l = l.bit_length()
 
     if reverse==True:
-      # print(s)
-      now = 2*self.input_length-1
+      now = (2*self.input_length)-1
       for i in range(bit_l):
-        # print(now-(1<<i),now)
         a = s[:,:,now-(1<<i):now]
         now = now-(1 << i)
         a = a.repeat_interleave(l//(1 << i), dim=2)
-        # print(a)
         x1=x1-a
     else:
       # print(s)
       now = 0
       for i in reversed(range(bit_l)):
-        # print(now,now+(1<<i))
         a = s[:,:,now:now+(1 << i)]
         now = now+(1 << i)
         a = a.repeat_interleave(l//(1 << i), dim=2)
-        # print(a)
         x1 = x1+a
     x = torch.cat([x0,x1],1)
     return x
@@ -656,6 +663,7 @@ class ResidualCouplingHierarchyBlock(nn.Module):
     self.n_flows = n_flows
 
     self.flows = nn.ModuleList()
+    # print("Hier Block: ",input_length)
     for i in range(n_flows):
       self.flows.append(Hierarchy_flow(channels, hidden_channels, kernel_size, dilation_rate, n_layers,input_length))
       self.flows.append(Flip())
