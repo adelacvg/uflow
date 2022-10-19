@@ -151,6 +151,8 @@ def plot_image_to_numpy(img):
     img = morton_decode(img)
     img = img.squeeze(0)
   img = (img+1)/2
+  # print(torch.max(img))
+  # print(torch.min(img))
   img = img.data.cpu().numpy()
 
   fig, ax = plt.subplots(figsize=(4,4))
@@ -195,7 +197,7 @@ def plot_images_to_numpy(imgs):
     if img.shape[2]==1:
       im = ax.imshow(img, cmap='gray',aspect='auto',interpolation='none')
     else:
-      im = ax.imshow(img, aspect='auto',origin='lower',interpolation='none')
+      im = ax.imshow(img, aspect='auto',interpolation='none')
   # fig.colorbar(im,ax=ax)
   fig.canvas.draw()
   data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')

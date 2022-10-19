@@ -401,6 +401,8 @@ class ResidualUpsampleCouplingBlock(nn.Module):
     flow_pyramid=[]
     if reverse==False:
       for i,flow in enumerate(self.flows):
+        # print("*")
+        # print(x.shape)
         if i%3==0:
           flow_pyramid.append(x)
           if unet_pyramid!=None:
@@ -414,6 +416,8 @@ class ResidualUpsampleCouplingBlock(nn.Module):
       return x,flow_pyramid
     else:
       for i,flow in enumerate(reversed(self.flows)):
+        # print("#")
+        # print(x.shape)
         if i%3==0:
           flow_pyramid.append(x)
         if i%3==2:
@@ -551,6 +555,13 @@ class FlowGenerator(nn.Module):
       z_norm=z
       z = self.flow1(z,reverse=True)
       return z,z_norm,flow_pyramid
+  def sample(self,num_samples,current_device):
+      z = torch.randn(num_samples,
+        self.inter_channels,
+        self.input_length)
+      z = z.to(current_device)
+      samples = self.flow1(z,reverse=True)
+      return samples
 
 class GeneratorTrn(nn.Module):
   def __init__(self,
@@ -576,7 +587,6 @@ class GeneratorTrn(nn.Module):
       return enc_z,z_norm,y,flow1_pyramid,x_enc,x,mu,log_var,flow2_pyramid
     else:
       enc_z,z_norm,flow2_pyramid = self.flow_g(x,reverse=True)
-      # print(enc_z.shape)
       x_reverse,flow1_pyramid=self.enc(enc_z)
       return x_reverse,enc_z,z_norm,flow1_pyramid,flow2_pyramid
 
@@ -603,15 +613,16 @@ class Hierarchy_flow(nn.Module):
     self.enc2 = WN(hidden_channel, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout)
     self.proj = nn.Conv1d(self.hidden_channel, self.half_channel, 1)
     self.proj2 = nn.Conv1d(self.hidden_channel, self.half_channel, 1)
-    # self.proj.weight.data.zero_()
-    # self.proj.bias.data.zero_()
-    # self.proj2.weight.data.zero_()
-    # self.proj2.bias.data.zero_()
+    self.proj.weight.data.zero_()
+    self.proj.bias.data.zero_()
+    self.proj2.weight.data.zero_()
+    self.proj2.bias.data.zero_()
     # self.proj_layer = nn.Linear(self.input_length,self.input_length*2-1)
 
   #x: B,C,T
   def forward(self, x, reverse=False):
     #x0:B,C/2,T
+    # print(x.shape)
     x0,x1 = torch.split(x,[self.half_channel]*2,1)
     l = int(x1.shape[2])
     s = x0
@@ -632,6 +643,8 @@ class Hierarchy_flow(nn.Module):
         a = s[:,:,now-(1<<i):now]
         now = now-(1 << i)
         a = a.repeat_interleave(l//(1 << i), dim=2)
+        # print(x1.shape)
+        # print(a.shape)
         x1=x1-a
     else:
       # print(s)

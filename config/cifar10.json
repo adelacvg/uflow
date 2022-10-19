@@ -1,0 +1,42 @@
+{
+  "train": {
+    "log_interval": 4,
+    "eval_interval": 1000,
+    "seed": 1234,
+    "epochs": 20000,
+    "learning_rate": 2e-4,
+    "betas": [0.8, 0.99],
+    "eps": 1e-9,
+    "batch_size": 16,
+    "fp16_run": false,
+    "lr_decay": 0.999875,
+    "init_lr_ratio": 1,
+    "warmup_epochs": 0,
+    "c_mel": 45,
+    "c_kl": 1.0,
+    "kld_weight":0.00025,
+    "input_size":256
+  },
+  "data": {
+  },
+  "net_g": {
+    "in_channels": 6,
+    "hidden_channels": 16,
+    "n_layers": 2,
+    "n_uplayers": 4,
+    "kernel_size": 3,
+    "scale_factor": 4,
+    "dilation_rate": 1,
+    "input_length": 0
+  },
+  "net_d":{
+    "in_channels":6,
+    "hidden_channels": 16,
+    "n_layers": 2,
+    "n_uplayers": 4,
+    "kernel_size": 3,
+    "scale_factor": 4,
+    "dilation_rate": 1,
+    "input_length": 0
+  }
+}

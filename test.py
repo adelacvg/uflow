@@ -342,40 +342,61 @@ w=4
 #2.decoder unet √
 #3.inference
 
-from torchvision import models
-from torchsummary import summary
+# from torchvision import models
+# from torchsummary import summary
 
-net_g = GeneratorTrn(
-    in_channels= 2,
-    hidden_channels= 128,
-    n_layers= 4,
-    n_uplayers= 3,
-    kernel_size= 3,
-    scale_factor= 4,
-    dilation_rate= 1,
-    expand=False,
-    input_length=16)
+# net_g = GeneratorTrn(
+#     in_channels= 2,
+#     hidden_channels= 128,
+#     n_layers= 4,
+#     n_uplayers= 3,
+#     kernel_size= 3,
+#     scale_factor= 4,
+#     dilation_rate= 1,
+#     expand=False,
+#     input_length=16)
 
-net_d = Decoder(in_channels= 2,
-    hidden_channels= 128,
-    n_layers= 4,
-    n_uplayers= 3,
-    kernel_size= 3,
-    scale_factor= 4,
-    dilation_rate= 1,
-    input_length=16)
-for name, p in net_g.named_parameters():
-  if p.requires_grad:
-    if p.numel()>1000000:
-      print(name)
-      print(p.numel())
-x =  sum(p.numel() for p in net_g.parameters() if p.requires_grad)
+# net_d = Decoder(in_channels= 2,
+#     hidden_channels= 128,
+#     n_layers= 4,
+#     n_uplayers= 3,
+#     kernel_size= 3,
+#     scale_factor= 4,
+#     dilation_rate= 1,
+#     input_length=16)
+# for name, p in net_g.named_parameters():
+#   if p.requires_grad:
+#     if p.numel()>1000000:
+#       print(name)
+#       print(p.numel())
+# x =  sum(p.numel() for p in net_g.parameters() if p.requires_grad)
+# # print(x)
+
+# for name, p in net_d.named_parameters():
+#   if p.requires_grad:
+#     if p.numel()>1000000:
+#       print(name)
+#       print(p.numel())
+# x =  sum(p.numel() for p in net_d.parameters() if p.requires_grad)
 # print(x)
 
-for name, p in net_d.named_parameters():
-  if p.requires_grad:
-    if p.numel()>1000000:
-      print(name)
-      print(p.numel())
-x =  sum(p.numel() for p in net_d.parameters() if p.requires_grad)
-# print(x)
+from torchvision import transforms
+
+train_dataset = torchvision.datasets.CelebA(
+  root="data",
+  download=True,
+  transform=transforms.Compose([transforms.ToTensor()])
+)
+from torch.utils.data import DataLoader
+train_loader = DataLoader(train_dataset,
+        batch_size=8,
+        shuffle=False,
+        num_workers=4)
+
+train_loader = [next(iter(train_loader))]
+for x,_ in train_loader:
+  print(x.shape)
+  print(torch.max(x[0]))
+  print(torch.min(x[0]))
+  print(x[0])
+  # save_image(x,'celeba1.png')

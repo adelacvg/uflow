@@ -29,7 +29,7 @@ import gc
 
 
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 # device = 'cpu'
 torch.backends.cudnn.benchmark = True
 global_step = 0
@@ -51,17 +51,17 @@ def run(hps):
 
   torch.manual_seed(hps.train.seed)
   input_size = hps.train.input_size
-  # train_dataset = torchvision.datasets.CelebA(
+  train_dataset = torchvision.datasets.CelebA(
+    root="data",
+    download=True,
+    transform=transforms.Compose([transforms.ToTensor(),transforms.Resize((input_size,input_size))])
+  )
+  # train_dataset = torchvision.datasets.MNIST(
   #   root="data",
+  #   train=True,
   #   download=True,
   #   transform=transforms.Compose([transforms.ToTensor(),transforms.Resize(input_size)])
   # )
-  train_dataset = torchvision.datasets.MNIST(
-    root="data",
-    train=True,
-    download=True,
-    transform=transforms.Compose([transforms.ToTensor(),transforms.Resize(input_size)])
-  )
   hps.net_g.input_length = (input_size//(int(math.sqrt(hps.net_g.scale_factor))**hps.net_g.n_uplayers))**2
   hps.net_d.input_length = (input_size//(int(math.sqrt(hps.net_d.scale_factor))**hps.net_d.n_uplayers))**2
 
@@ -69,8 +69,14 @@ def run(hps):
           batch_size=16,
           shuffle=False,
           num_workers=4)
-  eval_dataset = torchvision.datasets.MNIST(root="data", train=False, download=True,
-    transform=transforms.Compose([transforms.ToTensor(),transforms.Resize(input_size)]))
+  # eval_dataset = torchvision.datasets.MNIST(root="data", train=False, download=True,
+  #   transform=transforms.Compose([transforms.ToTensor(),transforms.Resize(input_size)]))
+  eval_dataset = torchvision.datasets.CelebA(
+    root="data",
+    download=True,
+    transform=transforms.Compose([transforms.ToTensor(),transforms.Resize((input_size,input_size))])
+  )
+
   eval_loader = DataLoader(eval_dataset,
           batch_size=16,
           shuffle=False,
@@ -103,7 +109,7 @@ def run(hps):
 
   scaler = GradScaler(enabled=hps.train.fp16_run)
 
-  train_loader = [next(iter(train_loader))]
+  # train_loader = [next(iter(train_loader))]
   
 
   torch.autograd.set_detect_anomaly(True)
@@ -204,6 +210,7 @@ def run(hps):
 
 
       if global_step%hps.train.eval_interval==0 and global_step!=0:
+        evaluate(hps, net_g, net_d, eval_loader, writer_eval)
         utils.save_checkpoint(net_g, optim_g, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "G_{}.pth".format(global_step)))
         utils.save_checkpoint(net_d, optim_d, hps.train.learning_rate, epoch, os.path.join(hps.model_dir, "D_{}.pth".format(global_step)))
       #   pass
@@ -213,6 +220,33 @@ def run(hps):
     logger.info('====> Epoch: {}'.format(epoch))
     scheduler_g.step()
 
+def evaluate(hps, generator, decoder,eval_loader, writer_eval):
+  generator.eval()
+  decoder.eval()
+  with torch.no_grad():
+    for batch_idx, (x, _) in enumerate(eval_loader):
+      x = x.to(device)
+      x = x*2-1
+      x = torch.cat([x,-x],dim=1)
+      _,enc_z,_,_,flow2_pyramid_reverse = generator(morton_encode(x),reverse=True)
+      flow2_pyramid_reverse.reverse()
+      y_dec,_,y_dec_post = decoder(enc_z,flow2_pyramid_reverse)
+
+      break
+  # print("eval")
+  image_dict = {
+    "gen/gt" : utils.plot_image_to_numpy(x),
+    "gen/y_dec" : utils.plot_image_to_numpy(y_dec),
+    "gen/y_dec_post" : utils.plot_image_to_numpy(y_dec_post),
+  }
+
+  utils.summarize(
+    writer=writer_eval,
+    global_step=global_step, 
+    images=image_dict,
+  )
+  generator.train()
+  decoder.train()
 
 if __name__ == "__main__":
   main()
