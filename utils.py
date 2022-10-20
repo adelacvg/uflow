@@ -137,8 +137,8 @@ def plot_image_to_numpy(img):
     import matplotlib
     matplotlib.use("Agg")
     MATPLOTLIB_FLAG = True
-    mpl_logger = logging.getLogger('matplotlib')
-    mpl_logger.setLevel(logging.WARNING)
+    # mpl_logger = logging.getLogger('matplotlib')
+    # mpl_logger.setLevel(logging.WARNING)
   import matplotlib.pylab as plt
   import numpy as np
 

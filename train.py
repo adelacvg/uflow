@@ -141,27 +141,28 @@ def run(hps):
           flow2_pyramid_reverse.reverse()
           loss_x_rv_recon =F.mse_loss(x_enc_reverse,x_enc.detach())
 
-      loss_x_rv_recon.backward(retain_graph=True)
+      loss_x_rv_recon.backward()
+      optim_g.step()
 
       loss_pyramid=0
       loss_pyramid_gt=0
       with autocast(enabled=hps.train.fp16_run):
-        y_dec,flow3_pyramid_forward,y_dec_post = net_d(enc_z,flow2_pyramid_reverse)
-        # y_dec_gt,y_pyramid_gt,y_dec_gt_post = net_d(enc_z_gt,flow2_pyramid_2)
+        flow2_pyramid_reverse = [layer.detach() for layer in flow2_pyramid_reverse]
+        y_dec,flow3_pyramid_forward,y_dec_post = net_d(enc_z.detach(),flow2_pyramid_reverse)
+        y_dec_gt,flow3_pyramid_forward_gt,y_dec_gt_post = net_d(enc_z_gt.detach(),flow2_pyramid_reverse)
         with autocast(enabled=False):
           # for i,yy in enumerate(flow3_pyramid_forward):
           #   loss_pyramid=loss_pyramid + torch.abs(yy-flow1_pyramid_reverse[i].detach()).mean()
           # for i,yy in enumerate(y_pyramid_gt):
           #   loss_pyramid_gt=loss_pyramid_gt + torch.abs(yy-flow1_pyramid_2[i].detach()).mean()
           loss_y_dec_recon = F.mse_loss(y_dec,x_enc.detach())
-          # loss_y_dec_recon_gt =  F.mse_loss(y_dec_gt,x_enc.detach())
+          loss_y_dec_recon_gt =  F.mse_loss(y_dec_gt,x_enc.detach())
           loss_y_dec_post_recon = F.mse_loss(y_dec_post,x.detach())
-          # loss_y_dec_recon_gt_post =  F.mse_loss(y_dec_gt_post,x.detach())
-          loss_d_total = loss_y_dec_recon+loss_y_dec_post_recon
+          loss_y_dec_recon_gt_post =  F.mse_loss(y_dec_gt_post,x.detach())
+          loss_d_total = loss_y_dec_recon+loss_y_dec_post_recon+loss_y_dec_recon_gt+loss_y_dec_recon_gt_post
       optim_d.zero_grad()
       loss_d_total.backward()
       optim_d.step()
-      optim_g.step()
       
       # torch.cuda.empty_cache()
       # torch.cuda.synchronize()
@@ -176,12 +177,12 @@ def run(hps):
         logger.info([i.item() for i in losses] + [global_step, lr])
         
         scalar_dict = {"loss/g/total": loss_g_all, "learning_rate": lr}
-        scalar_dict.update({"loss/g/recon": loss_recon, "loss/g/kld": loss_kld,"loss/g/z_recon":loss_x_rv_recon})
+        scalar_dict.update({"loss/g/recon": loss_recon, "loss/g/kld": loss_kld,"loss/g/x_rv_recon":loss_x_rv_recon})
         scalar_dict.update({
         'loss/d/loss_y_dec_recon':loss_y_dec_recon,
-        # 'loss/d/loss_y_dec_recon_gt':loss_y_dec_recon_gt,
+        'loss/d/loss_y_dec_recon_gt':loss_y_dec_recon_gt,
         "loss/d/loss_y_dec_post_recon":loss_y_dec_post_recon,
-        # "loss/d/loss_y_dec_recon_gt_post":loss_y_dec_recon_gt_post,
+        "loss/d/loss_y_dec_recon_gt_post":loss_y_dec_recon_gt_post,
         # "loss/d/loss_pyramid":loss_pyramid,
         # 'loss/d/loss_pyramid_gt':loss_pyramid_gt,
         'loss/d/total':loss_d_total})
@@ -191,15 +192,15 @@ def run(hps):
             "img/x" : utils.plot_image_to_numpy(x),
             "img/y" : utils.plot_image_to_numpy(y),
             "img/y_dec" : utils.plot_image_to_numpy(y_dec),
-            # "img/y_dec_gt" : utils.plot_image_to_numpy(y_dec_gt),
+            "img/y_dec_gt" : utils.plot_image_to_numpy(y_dec_gt),
             "img/y_dec_post" : utils.plot_image_to_numpy(y_dec_post),
-            # "img/y_dec_gt_post" : utils.plot_image_to_numpy(y_dec_gt_post),
+            "img/y_dec_gt_post" : utils.plot_image_to_numpy(y_dec_gt_post),
             "img/flow1_pyramid_reverse" : utils.plot_images_to_numpy(flow1_pyramid_reverse),
             "img/flow2_pyramid_forward" : utils.plot_images_to_numpy(flow2_pyramid_forward),
             "img/flow2_pyramid_reverse" : utils.plot_images_to_numpy(flow2_pyramid_reverse),
             "img/flow1_pyramid_forward" : utils.plot_images_to_numpy(flow1_pyramid_forward),
             "img/flow3_pyramid_forward" : utils.plot_images_to_numpy(flow3_pyramid_forward),
-            # "img/flow3_pyramid_1_2" : utils.plot_images_to_numpy(y_pyramid_gt),
+            "img/flow3_pyramid_forward_gt" : utils.plot_images_to_numpy(flow3_pyramid_forward_gt),
         }
         utils.summarize(
           writer=writer,

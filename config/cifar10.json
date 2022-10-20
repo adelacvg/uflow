@@ -15,7 +15,7 @@
     "c_mel": 45,
     "c_kl": 1.0,
     "kld_weight":0.00025,
-    "input_size":256
+    "input_size":32
   },
   "data": {
   },
