@@ -427,32 +427,32 @@ class ResidualUpsampleCouplingBlock(nn.Module):
       flow_pyramid.append(x)
       return x,flow_pyramid
 
-class ResidualConv1d(nn.Module):
-  def __init__(self,
-      input_channels,
-      output_channels,
-      kernel_size,
-      stride,
-      padding) -> None:
-    super().__init__()
-    self.input_channels=input_channels
-    self.output_channels=output_channels
-    self.stride=stride
-    self.conv = nn.Sequential(
-      nn.Conv1d(input_channels, output_channels, kernel_size, stride=1, padding=padding, bias=False),
-      nn.LeakyReLU(negative_slope=LRELU_SLOPE,inplace=True),
-    )
-    self.pool1 = nn.AvgPool1d(stride,stride)
-    self.pool2 = nn.AvgPool1d(stride,stride)
-  def forward(self, x):
-    # print(x.shape)
-    if self.output_channels>self.input_channels:
-      y = self.conv(self.pool1(x))
-      x = self.pool2(x).repeat_interleave(self.output_channels//self.input_channels,dim=1)
-      return x+y
-    else:
-      y = self.conv(x)
-      return y
+# class ResidualConv1d(nn.Module):
+#   def __init__(self,
+#       input_channels,
+#       output_channels,
+#       kernel_size,
+#       stride,
+#       padding) -> None:
+#     super().__init__()
+#     self.input_channels=input_channels
+#     self.output_channels=output_channels
+#     self.stride=stride
+#     self.conv = nn.Sequential(
+#       nn.Conv1d(input_channels, output_channels, kernel_size, stride=1, padding=padding, bias=False),
+#       nn.LeakyReLU(negative_slope=LRELU_SLOPE,inplace=True),
+#     )
+#     self.pool1 = nn.AvgPool1d(stride,stride)
+#     self.pool2 = nn.AvgPool1d(stride,stride)
+#   def forward(self, x):
+#     # print(x.shape)
+#     if self.output_channels>self.input_channels:
+#       y = self.conv(self.pool1(x))
+#       x = self.pool2(x).repeat_interleave(self.output_channels//self.input_channels,dim=1)
+#       return x+y
+#     else:
+#       y = self.conv(x)
+#       return y
 
 #input mnist B,2,1024
 class Encoder(nn.Module):
@@ -515,6 +515,8 @@ class FlowGenerator(nn.Module):
       input_length
       ):
     super().__init__()
+    self.inter_channels = inter_channels
+    self.input_length = input_length
     self.flow1 = ResidualCouplingBlock(inter_channels, hidden_channels, kernel_size, dilation_rate, n_layers)
     self.flow2 = ResidualCouplingBlock(inter_channels, hidden_channels, kernel_size, dilation_rate, n_layers)
     self.upflow = ResidualUpsampleCouplingBlock(inter_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
@@ -556,12 +558,12 @@ class FlowGenerator(nn.Module):
       z = self.flow1(z,reverse=True)
       return z,z_norm,flow_pyramid
   def sample(self,num_samples,current_device):
-      z = torch.randn(num_samples,
-        self.inter_channels,
-        self.input_length)
-      z = z.to(current_device)
-      samples = self.flow1(z,reverse=True)
-      return samples
+    z = torch.randn(num_samples,
+      self.inter_channels,
+      self.input_length)
+    z = z.to(current_device)
+    samples = self.flow1(z,reverse=True)
+    return samples
 
 class GeneratorTrn(nn.Module):
   def __init__(self,
@@ -578,7 +580,6 @@ class GeneratorTrn(nn.Module):
     self.enc = Encoder(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
     self.flow_g = FlowGenerator(in_channels,hidden_channels,kernel_size,scale_factor,dilation_rate,n_layers,n_uplayers,input_length)
   def forward(self,x,reverse=False):
-
     if reverse==False:
       x = torch.cat([x,-x],dim=1)
       x_enc=morton_encode(x)
@@ -589,6 +590,11 @@ class GeneratorTrn(nn.Module):
       enc_z,z_norm,flow2_pyramid = self.flow_g(x,reverse=True)
       x_reverse,flow1_pyramid=self.enc(enc_z)
       return x_reverse,enc_z,z_norm,flow1_pyramid,flow2_pyramid
+  def sample(self,num_samples,current_device):
+    samples = self.flow_g.sample(num_samples,current_device)
+    samples,_ = self.enc(samples)
+    return samples
+  
 
 
 
@@ -678,7 +684,7 @@ class ResidualCouplingHierarchyBlock(nn.Module):
     self.flows = nn.ModuleList()
     # print("Hier Block: ",input_length)
     for i in range(n_flows):
-      self.flows.append(Hierarchy_flow(channels, hidden_channels, kernel_size, dilation_rate, n_layers,input_length))
+      self.flows.append(Reverse_Hierarchy_flow(channels, hidden_channels, kernel_size, dilation_rate, n_layers,input_length))
       self.flows.append(Flip())
 
   def forward(self, x, reverse=False):
@@ -690,54 +696,58 @@ class ResidualCouplingHierarchyBlock(nn.Module):
         x = flow(x, reverse=reverse)
     return x
 
-#√
-class reverse_hierarchy_flow(nn.Module): 
+class Reverse_Hierarchy_flow(nn.Module): 
   def __init__(self,
       input_channel,
       hidden_channel,
+      kernel_size,
+      dilation_rate,
+      n_layers,
       input_length,
-      scale_factor) -> None:
+      p_dropout=0
+      ) -> None:
     super().__init__()
     self.input_channel = input_channel
     self.hidden_channel = hidden_channel
     self.input_length = input_length
-    self.scale_factor = scale_factor
     self.half_channel = input_channel//2
-    self.enc = nn.ModuleList([
-      nn.Conv1d(self.input_channel,self.hidden_channel,4,1,3), 
-      nn.Conv1d(self.input_channel,self.hidden_channel,4,1,3)
-    ])
-    self.proj = nn.Conv1d(self.hidden_channel, self.half_channels*2, 1)
+    self.pre = nn.Conv1d(self.half_channel,hidden_channel,1)
+    self.enc = WN(hidden_channel, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout)
+    self.enc2 = WN(hidden_channel, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout)
+    self.proj = nn.Conv1d(self.hidden_channel, self.half_channel, 1)
+    self.proj2 = nn.Conv1d(self.hidden_channel, self.half_channel, 1)
     self.proj.weight.data.zero_()
     self.proj.bias.data.zero_()
-    self.proj_weight = nn.Parameter(torch.rand(self.half_channel,self.input_length,self.input_length*2-1))
-    self.proj_bias = nn.Parameter(torch.rand(self.half_channel,1,self.input_length*2-1))
-  def __init__(self) -> None:
-    super().__init__()
-  def forward(self, x, s, inverse=False):
+    self.proj2.weight.data.zero_()
+    self.proj2.bias.data.zero_()
+
+  #x: B,C,T
+  def forward(self, x, reverse=False):
     #x0:B,C/2,T
-    x0,x1 = torch.split(x,[self.half_channels]*2,1)
-    l = x1.shape[2]
-    s = self.proj(self.enc(x0))
-    s = torch.bmm(s.transpose(0, 1),self.proj_weight)+self.proj_bias
-    s = s.tranpose(0,1)
-    #s: B,C/2,2*T-1
-    assert((l & (l-torch.tensor(1)) == 0) and l != 0)
-    assert(s.shape[0] == 2*l-1)
+    x0,x1 = torch.split(x,[self.half_channel]*2,1)
+    l = int(x1.shape[2])
+    s = x0
+    s = self.pre(s)
+    s1 = self.enc(s)
+    s1 = self.proj(s1)
+    s2 = self.enc2(s)
+    s2 = self.proj2(s2)
+    s = torch.cat([s1,s2],dim=2)
     bit_l = l.bit_length()
 
-    if inverse==True:
-      now = 0
+    if reverse==True:
+      now = (2*self.input_length)-1
       for i in reversed(range(bit_l)):
-        a = s[:,:,now:now+(1 << i)]
-        now = now+(1 << i)
+        a = s[:,:,now-(1<<i):now]
+        now = now-(1 << i)
         a = a.repeat_interleave(l//(1 << i), dim=2)
-        x = x-a
+        x1=x1-a
     else:
       now = 0
       for i in range(bit_l):
         a = s[:,:,now:now+(1 << i)]
         now = now+(1 << i)
         a = a.repeat_interleave(l//(1 << i), dim=2)
-        x = x+a
+        x1 = x1+a
+    x = torch.cat([x0,x1],1)
     return x

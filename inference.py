@@ -55,9 +55,8 @@ _, _, _, _ = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "
 num_samples = 8
 net_g.eval()
 net_d.eval()
-# with torch.no_grad():
-#   samples = net_g.sample(num_samples,device)
-#   samples = net_d(samples,)
+with torch.no_grad():
+  samples = net_g.sample(num_samples,device)
 
 # image_dict = {
 #     "gen/mel": utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy())
@@ -71,7 +70,7 @@ net_d.eval()
 #     images=image_dict,
 #     audios=audio_dict,
 #     audio_sampling_rate=hps.data.sampling_rate
-)
+# )
 net_g.train()
 net_d.train()
 

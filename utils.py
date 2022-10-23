@@ -8,12 +8,15 @@ import subprocess
 import numpy as np
 from scipy.io.wavfile import read
 import torch
+import warnings
+warnings.filterwarnings("ignore")
 
 from morton_code import morton_decode
 
 MATPLOTLIB_FLAG = False
 
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+logging.getLogger('PIL').setLevel(logging.WARNING)
 logger = logging
 
 
@@ -76,73 +79,19 @@ def latest_checkpoint_path(dir_path, regex="G_*.pth"):
   print(x)
   return x
 
-
-def plot_spectrogram_to_numpy(spectrogram):
-  global MATPLOTLIB_FLAG
-  if not MATPLOTLIB_FLAG:
-    import matplotlib
-    matplotlib.use("Agg")
-    MATPLOTLIB_FLAG = True
-    mpl_logger = logging.getLogger('matplotlib')
-    mpl_logger.setLevel(logging.WARNING)
-  import matplotlib.pylab as plt
-  import numpy as np
-  
-  fig, ax = plt.subplots(figsize=(10,2))
-  im = ax.imshow(spectrogram, aspect="auto", origin="lower",
-                  interpolation='none')
-  plt.colorbar(im, ax=ax)
-  plt.xlabel("Frames")
-  plt.ylabel("Channels")
-  plt.tight_layout()
-
-  fig.canvas.draw()
-  data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-  data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-  plt.close()
-  return data
-
-
-def plot_alignment_to_numpy(alignment, info=None):
-  global MATPLOTLIB_FLAG
-  if not MATPLOTLIB_FLAG:
-    import matplotlib
-    matplotlib.use("Agg")
-    MATPLOTLIB_FLAG = True
-    mpl_logger = logging.getLogger('matplotlib')
-    mpl_logger.setLevel(logging.WARNING)
-  import matplotlib.pylab as plt
-  import numpy as np
-
-  fig, ax = plt.subplots(figsize=(6, 4))
-  im = ax.imshow(alignment.transpose(), aspect='auto', origin='lower',
-                  interpolation='none')
-  fig.colorbar(im, ax=ax)
-  xlabel = 'Decoder timestep'
-  if info is not None:
-      xlabel += '\n\n' + info
-  plt.xlabel(xlabel)
-  plt.ylabel('Encoder timestep')
-  plt.tight_layout()
-
-  fig.canvas.draw()
-  data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-  data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-  plt.close()
-  return data
-
 def plot_image_to_numpy(img):
   global MATPLOTLIB_FLAG
   if not MATPLOTLIB_FLAG:
     import matplotlib
     matplotlib.use("Agg")
     MATPLOTLIB_FLAG = True
-    # mpl_logger = logging.getLogger('matplotlib')
-    # mpl_logger.setLevel(logging.WARNING)
+    mpl_logger = logging.getLogger('matplotlib')
+    mpl_logger.setLevel(logging.ERROR)
   import matplotlib.pylab as plt
   import numpy as np
 
   img = img[0]
+  # torch.clamp(img, min=-1.0, max=1.0)
   if img.shape[0]%2==0:
     half_channel = img.shape[0]//2
     img,_=torch.split(img,[half_channel,half_channel],dim=0)
@@ -151,16 +100,15 @@ def plot_image_to_numpy(img):
     img = morton_decode(img)
     img = img.squeeze(0)
   img = (img+1)/2
-  # print(torch.max(img))
-  # print(torch.min(img))
-  img = img.data.cpu().numpy()
+  img = img.float().data.cpu().numpy()
 
+  # print(img.dtype)
   fig, ax = plt.subplots(figsize=(4,4))
   img = np.transpose(img,(1,2,0))
   if img.shape[2]==1:
-    im = ax.imshow(img, cmap='gray',aspect='auto',interpolation='none')
+    im = ax.imshow((img * 255).astype(np.uint8), cmap='gray',aspect='auto',interpolation='none')
   else:
-    im = ax.imshow(img, aspect='auto',interpolation='none')
+    im = ax.imshow((img * 255).astype(np.uint8), aspect='auto',interpolation='none')
   # fig.colorbar(im,ax=ax)
   fig.canvas.draw()
   data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
@@ -175,14 +123,17 @@ def plot_images_to_numpy(imgs):
     matplotlib.use("Agg")
     MATPLOTLIB_FLAG = True
     mpl_logger = logging.getLogger('matplotlib')
-    mpl_logger.setLevel(logging.WARNING)
+    mpl_logger.setLevel(logging.ERROR)
   import matplotlib.pylab as plt
   import numpy as np
 
   img_nums = len(imgs)
+  # print(img_nums)
+  # print(imgs[0].shape)
   fig, axs = plt.subplots(1,img_nums,figsize=(4*img_nums,4))
   for i,ax in enumerate(axs):
     img = imgs[i][0]
+    # torch.clamp(img, min=-1.0, max=1.0)
     if img.shape[0]%2==0:
       half_channel = img.shape[0]//2
       img,_=torch.split(img,[half_channel,half_channel],dim=0)
@@ -195,9 +146,9 @@ def plot_images_to_numpy(imgs):
 
     img = np.transpose(img,(1,2,0))
     if img.shape[2]==1:
-      im = ax.imshow(img, cmap='gray',aspect='auto',interpolation='none')
+      im = ax.imshow((img * 255).astype(np.uint8), cmap='gray',aspect='auto',interpolation='none')
     else:
-      im = ax.imshow(img, aspect='auto',interpolation='none')
+      im = ax.imshow((img * 255).astype(np.uint8), aspect='auto',interpolation='none')
   # fig.colorbar(im,ax=ax)
   fig.canvas.draw()
   data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')

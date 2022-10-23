@@ -18,6 +18,8 @@
     "input_size":256
   },
   "data": {
+    "dataset":"celeba",
+    "number":1
   },
   "net_g": {
     "in_channels": 6,

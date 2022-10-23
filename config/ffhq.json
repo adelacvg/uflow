@@ -7,7 +7,7 @@
     "learning_rate": 2e-4,
     "betas": [0.8, 0.99],
     "eps": 1e-9,
-    "batch_size": 64,
+    "batch_size": 16,
     "fp16_run": false,
     "lr_decay": 0.999875,
     "init_lr_ratio": 1,
@@ -15,27 +15,27 @@
     "c_mel": 45,
     "c_kl": 1.0,
     "kld_weight":0.00025,
-    "input_size":32
+    "input_size":256
   },
   "data": {
-    "dataset":"mnist",
-    "number":1
+    "dataset":"ffhq",
+    "number":2
   },
   "net_g": {
-    "in_channels": 2,
-    "hidden_channels": 128,
-    "n_layers": 4,
-    "n_uplayers": 2,
+    "in_channels": 6,
+    "hidden_channels": 32,
+    "n_layers": 2,
+    "n_uplayers": 4,
     "kernel_size": 3,
     "scale_factor": 4,
     "dilation_rate": 1,
     "input_length": 0
   },
   "net_d":{
-    "in_channels":2,
-    "hidden_channels": 128,
-    "n_layers": 4,
-    "n_uplayers": 2,
+    "in_channels":6,
+    "hidden_channels": 32,
+    "n_layers": 2,
+    "n_uplayers": 4,
     "kernel_size": 3,
     "scale_factor": 4,
     "dilation_rate": 1,

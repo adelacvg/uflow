@@ -12,99 +12,82 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import glob
 import random
+from torchvision import transforms
 import shutil
 
 
 def extract_frames(src_path,target_path,fps=1):
   for video_name in (os.listdir(src_path)):
-      video_path = src_path + video_name
-      print(video_path)
-      image_path = target_path+video_name.split('.mp4')[0]+'/'
-      print(image_path)
-      if not os.path.exists(image_path):
-          os.makedirs(image_path)
-      dest = image_path + video_name.split('.mp4')[0]+'-%08d.jpg'
-      call(["ffmpeg", "-i", video_path, "-r", str(fps), dest])
+    video_path = src_path + video_name
+    print(video_path)
+    image_path = target_path+video_name.split('.mp4')[0]+'/'
+    print(image_path)
+    if not os.path.exists(image_path):
+        os.makedirs(image_path)
+    dest = image_path + video_name.split('.mp4')[0]+'-%05d.jpg'
+    call(["ffmpeg", "-i", video_path, "-r", str(fps), dest])
 
+class FFHQDataset(Dataset):
+  def __init__(self,dataset_path,transform=None) -> None:
+    super().__init__()
+    self.root_path = dataset_path
+    self.hq_imgs = sorted(os.listdir(dataset_path+'/hq'))
+    self.lq_imgs = sorted(os.listdir(dataset_path+'/lq'))
+    self.transform = transform
+  def __len__(self):
+    return len(self.hq_imgs)
+  def __getitem__(self,idx):
+    img_lq = io.imread(os.path.join(self.root_path+'/lq',self.lq_imgs[idx]))
+    img_hq = io.imread(os.path.join(self.root_path+'/hq',self.hq_imgs[idx]))
+    # print(img_hq)
+    if self.transform:
+      img_lq = self.transform(img_lq)
+      img_hq = self.transform(img_hq)
+    return img_lq,img_hq
 
-
-def read_video(name, frame_shape):
-  if os.path.isdir(name):
-      frames = sorted(os.listdir(name))
-      num_frames = len(frames)
-      video_array = np.array(
-          [img_as_float32(io.imread(os.path.join(name, frames[idx]))) for idx in range(num_frames)])
-  elif name.lower().endswith('.png') or name.lower().endswith('.jpg'):
-      image = io.imread(name)
-
-      if len(image.shape) == 2 or image.shape[2] == 1:
-          image = gray2rgb(image)
-
-      if image.shape[2] == 4:
-          image = image[..., :3]
-
-      image = img_as_float32(image)
-
-      video_array = np.moveaxis(image, 1, 0)
-
-      video_array = video_array.reshape((-1,) + frame_shape)
-      video_array = np.moveaxis(video_array, 1, 2)
-  elif name.lower().endswith('.gif') or name.lower().endswith('.mp4') or name.lower().endswith('.mov'):
-      video = np.array(mimread(name))
-      if len(video.shape) == 3:
-          video = np.array([gray2rgb(frame) for frame in video])
-      if video.shape[-1] == 4:
-          video = video[..., :3]
-      video_array = img_as_float32(video)
-  else:
-      raise Exception("Unknown file extensions  %s" % name)
-
-  return video_array
-
-class TwoFramesDataset(Dataset):
-  def __init__(self, root_dir, frame_shape=(256, 256, 3),random_seed=0, is_train=True, max_interval=60):
-      self.image_lists=[]
-      self.max_interval=max_interval
-      for root,dirs,files in os.walk(root_dir):
-          for dir in dirs:
-              self.image_lists.append(read_video(os.path.join(root,dir), frame_shape))
-      train_videos, test_videos = train_test_split(self.image_lists, random_state=random_seed, test_size=0.2)
-      if is_train:
-          self.image_lists=train_videos
-      else:
-          self.image_lists=test_videos
+class FangtanDataset(Dataset):
+  def __init__(self, root_dir, transform=None, max_interval=60):
+    super().__init__()
+    self.image_lists=[]
+    self.imgs_dirs=[]
+    self.max_interval=max_interval
+    self.transform = transform
+    for root,dirs,files in os.walk(root_dir):
+      for dir in dirs:
+        self.imgs_dirs.append(os.path.join(root,dir))
+        self.image_lists.append(sorted(os.listdir((os.path.join(root,dir)))))
 
   def __len__(self):
       return len(self.image_lists)
 
   def __getitem__(self, idx):
-      image_list=self.image_lists[idx]
-      frame1=random.randint(0,len(image_list)-2)
-      frame2=0
-      if frame1+self.max_interval>len(image_list)-1:
-          frame2=random.randint(frame1+1, len(image_list)-1)
-      return image_list[frame1], image_list[frame2], frame2-frame1
+    image_list=self.image_lists[idx]
+    frame1=random.randint(0,len(image_list)-2)
+    frame2=random.randint(frame1, min(len(image_list)-1,frame1+self.max_interval))
+    interval = frame2-frame1
+    frame1 = io.imread(os.path.join(self.imgs_dirs[idx],image_list[frame1]))
+    frame2 = io.imread(os.path.join(self.imgs_dirs[idx],image_list[frame2]))
+    if self.transform:
+      frame1 = self.transform(frame1)
+      frame2 = self.transform(frame2)
+    return frame1, frame2, interval
 
 
-if __name__ == '__main__':
-  extract_frames(src_path='./test_data/',target_path='./test_data/',fps=30)
-  dataset=TwoFramesDataset('./test_data/')
-  data=DataLoader(dataset, batch_size=2, shuffle=True)
-  for batch_num, (frame1, frame2, interval) in enumerate(data):
-      print(frame1.shape, frame2.shape, interval)
-    
+# extract_frames(src_path='/home/hyc/fangtan/train/',target_path='./data/fangtan/train/',fps=30)
+# extract_frames(src_path='/home/hyc/fangtan/test/',target_path='./data/fangtan/test/',fps=30)
 
-class FFHQDataset(Dataset):
-  def __init__(self) -> None:
-      super().__init__()
-  def __len__(self):
-      
-  def __getitem__(self,idx):
+dataset = FFHQDataset('./data/ffhq',transform=transforms.Compose([transforms.ToTensor()]))
+data=DataLoader(dataset, batch_size=2, shuffle=True)
+data = [next(iter(data))]
+for batch_num, input_dict in enumerate(data):
+  frame1,frame2 = input_dict
+  print(len(input_dict))
+  # print(frame1.shape, frame2.shape)
+  # print(frame1)
 
-
-class FangtanDataset(Dataset):
-  def __init__(self) -> None:
-      super().__init__()
-  def __len__(self):
-  
-  def __getitem__(self,idx):
+# dataset = FangtanDataset('./data/fangtan/train',transform=transforms.Compose([transforms.ToTensor()]))
+# data=DataLoader(dataset, batch_size=2, shuffle=True)
+# data = [next(iter(data))]
+# for batch_num, (frame1, frame2,interval) in enumerate(data):
+#   print(frame1.shape, frame2.shape)
+#   print(frame1)
